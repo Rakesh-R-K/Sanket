@@ -78,54 +78,17 @@ function StatBand({ d, lead }: { d: DistrictRisk; lead: LeadTime | null }) {
 /* ── constellation map (ring layout, any district) ── */
 function DistrictMap({ d, active, onSelectBlock }:
   { d: DistrictRisk; active: string | null; onSelectBlock: (b: string | null) => void }) {
-  const names = Object.keys(d.blocks)
-  const POS: Record<string, { x: number; y: number }> = {}
-  names.forEach((n, i) => {
-    const a = (i / names.length) * Math.PI * 2 - Math.PI / 3.2
-    POS[n] = { x: 50 + 26 * Math.cos(a), y: 49 + 25 * Math.sin(a) }
-  })
-  const blocks = Object.entries(d.blocks)
-  const edges: [string, string][] = []
-  for (let i = 0; i < blocks.length; i++)
-    for (let j = i + 1; j < blocks.length; j++) edges.push([blocks[i][0], blocks[j][0]])
-  return (
-    <svg viewBox="0 0 100 92" className="w-full">
-      {edges.map(([a, b], i) => {
-        const p1 = POS[a] ?? { x: 50, y: 50 }, p2 = POS[b] ?? { x: 50, y: 50 }
-        return <line key={i} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y}
-          stroke="var(--edge-lit)" strokeWidth=".4" strokeDasharray="2 3"
-          style={{ animation: 'dashFlow 3s linear infinite' }} />
-      })}
-      {blocks.map(([name, b], bi) => {
-        const p = POS[name] ?? { x: 50, y: 50 }
-        const lvl = blockLevel(b.levels)
-        const total = Object.values(b.levels).reduce((s, n) => s + n, 0)
-        const flagged = (b.levels.alert ?? 0) + (b.levels.warning ?? 0) + (b.levels.watch ?? 0)
-        const r = 6 + Math.min(6, total * 0.45)
-        const c = LEVEL_COLOR[lvl]
-        return (
-          <motion.g key={name} onClick={() => onSelectBlock(active === name ? null : name)}
-            className="cursor-pointer"
-            initial={{ opacity: 0, scale: .6 }} animate={{ opacity: 1, scale: 1 }}
-            transition={{ ...spring, delay: bi * .1 }}>
-            {lvl !== 'healthy' && (
-              <circle cx={p.x} cy={p.y} r={r} fill="none" stroke={c} strokeWidth=".7" opacity=".55">
-                <animate attributeName="r" values={`${r};${r * 2.1}`} dur="1.9s" repeatCount="indefinite" />
-                <animate attributeName="opacity" values=".55;0" dur="1.9s" repeatCount="indefinite" />
-              </circle>
-            )}
-            <circle cx={p.x} cy={p.y} r={r} fill={c} fillOpacity={active === name ? .5 : .2}
-              stroke={c} strokeWidth={active === name ? 1.5 : .9}
-              style={{ transition: 'all .4s ease', filter: lvl !== 'healthy' ? `drop-shadow(0 0 5px ${c})` : undefined }} />
-            <text x={p.x} y={p.y - r - 3.2} textAnchor="middle" fill="var(--ink-dim)"
-              fontSize="4.2" fontWeight="700" style={{ letterSpacing: '.12em' }}>{name.toUpperCase()}</text>
-            <text x={p.x} y={p.y + 1.7} textAnchor="middle" fill="var(--ink)"
-              fontSize="4.6" fontWeight="800" className="num">{flagged}/{total}</text>
-          </motion.g>
-        )
-      })}
-    </svg>
-  )
+  return <div className="space-y-2">
+    {Object.entries(d.blocks).map(([name, block]) => {
+      const total = Object.values(block.levels).reduce((sum, n) => sum + n, 0)
+      const flagged = total - (block.levels.healthy ?? 0)
+      return <button key={name} aria-pressed={active === name} onClick={() => onSelectBlock(active === name ? null : name)}
+        className="flex w-full justify-between gap-3 rounded-lg border px-3 py-3 text-left text-sm"
+        style={{ borderColor: active === name ? 'var(--lime)' : 'var(--edge)' }}>
+        <span>{name}</span><span className="mono" style={{ color: LEVEL_COLOR[blockLevel(block.levels)] }}>{flagged} / {total}</span>
+      </button>
+    })}
+  </div>
 }
 
 /* ── section heading: the hero's two-tone voice, reused everywhere ── */
@@ -146,6 +109,9 @@ export function OfficerConsole() {
   const [lead, setLead] = useState<LeadTime | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [blockFilter, setBlockFilter] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [sector, setSector] = useState('')
+  const [risk, setRisk] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [cascade, setCascade] = useState<CascadeResult | null>(null)
@@ -188,7 +154,9 @@ export function OfficerConsole() {
   if (selected !== null)
     return <EnterpriseProfile id={selected} onBack={() => { setSelected(null); void refresh() }} />
 
-  const visible = blockFilter ? rows.filter(r => r.block === blockFilter) : rows
+  const visible = rows.filter(row => (!blockFilter || row.block === blockFilter)
+    && (!sector || row.sector === sector) && (!risk || row.risk === risk)
+    && `${row.name} ${row.village}`.toLowerCase().includes(query.trim().toLowerCase()))
   const needAttention = (district?.kpis.alerts ?? 0) + (district?.kpis.warnings ?? 0)
 
   return (
@@ -237,7 +205,7 @@ export function OfficerConsole() {
         {district && <div className="mt-7"><StatBand d={district} lead={lead} /></div>}
       </section>
 
-      <div className="mx-auto grid w-full max-w-[1560px] gap-10 px-6 md:px-12 lg:grid-cols-[1fr_360px]">
+      <div className="mx-auto grid w-full max-w-[1560px] gap-10 px-6 md:px-12 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* ── triage: editorial ledger, not cards ── */}
         <div>
           <div className="flex items-baseline gap-4">
@@ -251,6 +219,29 @@ export function OfficerConsole() {
             )}
           </div>
 
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <label className="text-sm">{lang === 'hi' ? 'नाम या गाँव खोजें' : 'Search name or village'}
+              <input type="search" value={query} onChange={ev => setQuery(ev.target.value)} className="mt-1 block w-full rounded-lg border border-[var(--edge)] p-3" />
+            </label>
+            <label className="text-sm">{lang === 'hi' ? 'क्षेत्र' : 'Sector'}
+              <select value={sector} onChange={ev => setSector(ev.target.value)} className="mt-1 block w-full rounded-lg border border-[var(--edge)] bg-[var(--surface)] p-3">
+                <option value="">{lang === 'hi' ? 'सभी क्षेत्र' : 'All sectors'}</option>
+                {Object.entries(sectorLabels).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+              </select>
+            </label>
+            <label className="text-sm">{lang === 'hi' ? 'जोखिम' : 'Risk'}
+              <select value={risk} onChange={ev => setRisk(ev.target.value)} className="mt-1 block w-full rounded-lg border border-[var(--edge)] bg-[var(--surface)] p-3">
+                <option value="">{lang === 'hi' ? 'सभी स्तर' : 'All levels'}</option>
+                {Object.entries(RISK_KEY).map(([key, label]) => <option key={key} value={key}>{t(label)}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap justify-between gap-2 text-sm text-[var(--ink-dim)]">
+            <p role="status">{visible.length} / {rows.length} {lang === 'hi' ? 'उद्यम' : 'enterprises'}</p>
+            {(query || sector || risk || blockFilter) && <button className="underline" onClick={() => { setQuery(''); setSector(''); setRisk(''); setBlockFilter(null) }}>{lang === 'hi' ? 'फ़िल्टर हटाएँ' : 'Clear filters'}</button>}
+          </div>
+          {loaded && !visible.length && <p className="py-8 text-sm text-[var(--ink-dim)]">{lang === 'hi' ? 'इन फ़िल्टरों से कोई उद्यम नहीं मिला।' : 'No enterprises match these filters.'}</p>}
+
           {!loaded ? (
             <div className="mt-5 space-y-px">
               {Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton h-[76px]" />)}
@@ -261,7 +252,7 @@ export function OfficerConsole() {
               {visible.map((e, idx) => (
                 <motion.button key={e.id} layout onClick={() => setSelected(e.id)}
                   variants={{ off: { opacity: 0, y: 16 }, on: { opacity: 1, y: 0, transition: spring } }}
-                  className="group grid w-full grid-cols-[2.6rem_1fr_auto_1.6rem] items-center gap-3 border-b border-[var(--edge)] py-4 pr-1 text-left transition-colors duration-300 hover:bg-[var(--accent-soft)] md:grid-cols-[3.2rem_1.15fr_.85fr_7.5rem_1.8rem] md:gap-5">
+                  className="group grid w-full grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 border-b border-[var(--edge)] py-4 pr-1 text-left transition-colors duration-300 hover:bg-[var(--accent-soft)] md:grid-cols-[3.2rem_1.15fr_.85fr_7.5rem_1.8rem] md:gap-5">
                   <span className="mono num text-sm text-[var(--ink-faint)] transition-colors group-hover:text-[var(--lime)]">
                     {String(idx + 1).padStart(2, '0')}
                   </span>
@@ -284,7 +275,7 @@ export function OfficerConsole() {
                     style={{ color: LEVEL_COLOR[e.risk] }}>
                     {t(RISK_KEY[e.risk])}
                   </span>
-                  <span className="translate-x-0 text-[var(--ink-faint)] opacity-0 transition-all duration-300 group-hover:translate-x-1 group-hover:text-[var(--lime)] group-hover:opacity-100">
+                  <span className="hidden md:block translate-x-0 text-[var(--ink-faint)] opacity-0 transition-all duration-300 group-hover:translate-x-1 group-hover:text-[var(--lime)] group-hover:opacity-100">
                     <Icon.arrowRight size={16} />
                   </span>
                 </motion.button>
