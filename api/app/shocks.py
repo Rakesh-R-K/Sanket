@@ -47,4 +47,4 @@ def inject(con, shock_key: str) -> dict:
 def reset_and_recascade() -> dict:
     """Full pristine reset: rebuild external series + simulation + cascade."""
     from . import seed
-    return seed.run()
+    return seed.run(reset=True)

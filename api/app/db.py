@@ -1,17 +1,9 @@
-"""SQLite layer for Sanket. Single-file DB, schema-on-start, no ORM.
-
-Design notes:
-- flags cannot exist without reasons: enforced in create_flag() which takes
-  reasons as a required non-empty argument (application-level constraint).
-- external_series holds REAL Agmarknet/IMD data; transactions hold simulated
-  (and later user-entered) enterprise financials. The split is deliberate:
-  it is the demo's "what's real vs what's mock" story, made structural.
-"""
 import json
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "sanket.db"
+dbPath = Path(os.environ.get("SANKET_DB", Path(__file__).resolve().parent.parent / "sanket.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS enterprises (
@@ -110,13 +102,14 @@ CREATE INDEX IF NOT EXISTS idx_flags_ent ON flags(enterprise_id, status);
 
 
 def connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
+    dbPath.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(dbPath, timeout=15)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     return con
 
 
-def init_db(con: sqlite3.Connection | None = None) -> None:
+def initDb(con: sqlite3.Connection | None = None) -> None:
     own = con is None
     con = con or connect()
     con.executescript(SCHEMA)
@@ -125,15 +118,14 @@ def init_db(con: sqlite3.Connection | None = None) -> None:
         con.close()
 
 
-def reset_db() -> None:
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    init_db()
+def resetDb() -> None:
+    if dbPath.exists():
+        dbPath.unlink()
+    initDb()
 
 
 def create_flag(con, enterprise_id: int, level: str, opened_at: str,
                 reasons: list[dict], signal_id: int | None = None) -> int:
-    """A flag without reasons is a black box — structurally forbidden."""
     if not reasons:
         raise ValueError("flag requires >=1 reason (explainability contract)")
     cur = con.execute(

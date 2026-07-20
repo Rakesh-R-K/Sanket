@@ -1,17 +1,5 @@
-"""Smoke tests for the intelligence spine - the code a judge might inspect,
-and the code whose failure kills the demo."""
-import pytest
-from fastapi.testclient import TestClient
-
-from app import db, seed
-from app.main import app
+from app import db
 from app.shocks import inject
-
-
-@pytest.fixture(scope="module")
-def client():
-    seed.run(seed=42)
-    return TestClient(app)
 
 
 def test_seed_is_deterministic_and_complete(client):

@@ -3,6 +3,10 @@ node_modules/
 dist/
 __pycache__/
 *.pyc
-sanket.db
+*.db
+*.db-*
+.env
+.env.*
+!.env.example
 data/raw/
 .pytest_cache/

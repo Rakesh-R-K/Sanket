@@ -1,6 +1,6 @@
-"""Seed: external series -> simulator -> DB -> baseline cascade. <60s target."""
 from __future__ import annotations
 
+import argparse
 import time
 
 from . import db
@@ -9,9 +9,17 @@ from .engine import run_cascade
 from .simulator import generate
 
 
-def run(seed: int = 42) -> dict:
+def run(seed: int = 42, reset: bool = False) -> dict:
     t0 = time.time()
-    db.reset_db()
+    if reset:
+        db.resetDb()
+    else:
+        db.initDb()
+    con = db.connect()
+    count = con.execute("SELECT COUNT(*) FROM enterprises").fetchone()[0]
+    con.close()
+    if count:
+        return {"enterprises": count, "note": "existing data kept; use --reset to replace it"}
     external = build_history(seed)
     sim = generate(external, seed)
 
@@ -46,4 +54,6 @@ def run(seed: int = 42) -> dict:
 
 
 if __name__ == "__main__":
-    print(run())
+    parser = argparse.ArgumentParser(description="Create the local Sanket demo dataset.")
+    parser.add_argument("--reset", action="store_true", help="delete saved entries and rebuild demo data")
+    print(run(reset=parser.parse_args().reset))
