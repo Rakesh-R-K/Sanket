@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     amount REAL NOT NULL,
     note TEXT DEFAULT '',
     entered_at TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'simulated'
+    source TEXT NOT NULL DEFAULT 'simulated',
+    client_id TEXT
 );
 CREATE TABLE IF NOT EXISTS loans (
     id INTEGER PRIMARY KEY,
@@ -119,6 +120,10 @@ def initDb(con: sqlite3.Connection | None = None) -> None:
         columns = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
         if "active" not in columns:
             con.execute(f"ALTER TABLE {table} ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    columns = {r["name"] for r in con.execute("PRAGMA table_info(transactions)")}
+    if "client_id" not in columns:
+        con.execute("ALTER TABLE transactions ADD COLUMN client_id TEXT")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_txn_client ON transactions(client_id)")
     con.commit()
     if own:
         con.close()

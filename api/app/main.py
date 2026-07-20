@@ -4,6 +4,7 @@ import json
 from contextlib import asynccontextmanager, closing
 from datetime import date, datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,7 @@ class Input(BaseModel):
 
 
 class TxnIn(Input):
+    clientId: UUID | None = Field(default=None, alias="client_id")
     enterpriseId: int = Field(alias="enterprise_id", gt=0)
     type: Literal["income", "expense", "savings", "loan_repayment"]
     amount: float = Field(gt=0, le=100_000_000, multiple_of=0.01)
@@ -269,19 +271,31 @@ def districtRisk(district: str):
 
 @app.post("/transactions/batch")
 def addTransactions(txns: Annotated[list[TxnIn], Body(min_length=1, max_length=100)]):
+    inserted, changed = 0, set()
     with closing(db.connect()) as con, con:
         for eid in {t.enterpriseId for t in txns}:
             requireEnterprise(con, eid)
-        con.executemany(
-            "INSERT INTO transactions(enterprise_id, type, amount, note,"
-            " entered_at, source) VALUES (?,?,?,?,?,?)",
-            [(t.enterpriseId, t.type, t.amount, t.note, t.enteredAt.isoformat(), "manual")
-             for t in txns])
+        for txn in txns:
+            key = str(txn.clientId) if txn.clientId else None
+            values = (txn.enterpriseId, txn.type, txn.amount, txn.note, txn.enteredAt.isoformat(), "manual")
+            cur = con.execute(
+                "INSERT INTO transactions(enterprise_id, type, amount, note, entered_at, source, client_id)"
+                " VALUES (?,?,?,?,?,?,?) ON CONFLICT(client_id) DO NOTHING", (*values, key))
+            if cur.rowcount:
+                inserted += 1
+                changed.add(txn.enterpriseId)
+            else:
+                old = con.execute(
+                    "SELECT enterprise_id, type, amount, note, entered_at, source FROM transactions WHERE client_id=?",
+                    (key,)).fetchone()
+                if tuple(old) != values:
+                    raise HTTPException(409, "entry id was already used for different values")
         signals = activeSignals(con)
-        for eid in {t.enterpriseId for t in txns}:
+        for eid in changed:
             enterprise = con.execute("SELECT id, sector FROM enterprises WHERE id=?", (eid,)).fetchone()
             refreshEnterprise(con, enterprise, signals)
-    return {"synced": len(txns)}
+    return {"synced": len(txns), "inserted": inserted,
+            "accepted_ids": [str(t.clientId) if t.clientId else None for t in txns]}
 
 
 @app.post("/interventions")
