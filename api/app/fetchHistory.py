@@ -8,27 +8,30 @@ import urllib.request
 
 from .dataLayer import rawDir
 
-key = os.environ.get(
-    "DATAGOV_KEY", "579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b")
 resource = "35985678-0d79-46b4-9ed6-6f13308a1d24"
 baseUrl = f"https://api.data.gov.in/resource/{resource}"
 
 
-def getPage(params: dict, tries: int = 5) -> dict:
+def getPage(params: dict, tries: int = 3) -> dict:
     url = baseUrl + "?" + urllib.parse.urlencode(params)
-    delay = 2.0
     for attempt in range(tries):
         try:
-            with urllib.request.urlopen(url, timeout=30) as r:
-                return json.load(r)
-        except Exception:
-            time.sleep(delay)
-            delay = min(delay * 2, 30)
-    return {}
+            with urllib.request.urlopen(url, timeout=30) as res:
+                data = json.load(res)
+            if not isinstance(data, dict) or not isinstance(data.get("records"), list):
+                raise RuntimeError("Market API returned no records list. Check DATAGOV_KEY.")
+            return data
+        except (OSError, json.JSONDecodeError):
+            if attempt + 1 < tries:
+                time.sleep(2 ** attempt)
+    raise RuntimeError("Market data request failed. Check DATAGOV_KEY and connectivity.")
 
 
 def fetchCommodity(commodity: str, state: str = "Maharashtra",
                     page: int = 100, maxRecords: int = 4000) -> int:
+    key = os.environ.get("DATAGOV_KEY", "").strip()
+    if not key:
+        raise RuntimeError("Set DATAGOV_KEY to your data.gov.in API key before fetching history.")
     outPath = rawDir / f"history_{commodity.lower()}.json"
     records: list[dict] = []
     seen: set[tuple] = set()
@@ -44,9 +47,7 @@ def fetchCommodity(commodity: str, state: str = "Maharashtra",
                   "filters[state]": state})
         recs = d.get("records", [])
         if not recs:
-            stall += 1
-            time.sleep(3)
-            continue
+            break
         new = [r for r in recs
                if (r["Arrival_Date"], r["Market"], r.get("Variety")) not in seen]
         for r in new:
@@ -59,10 +60,15 @@ def fetchCommodity(commodity: str, state: str = "Maharashtra",
         print(f"{commodity}: {len(records)} records (total avail {d.get('total')})",
               flush=True)
         time.sleep(1.2)                          # be polite to the throttler
+    if not records:
+        raise RuntimeError(f"No {commodity} records returned; existing demo data was kept.")
     return len(records)
 
 
 if __name__ == "__main__":
-    for c in ("Maize", "Soyabean"):
-        n = fetchCommodity(c)
-        print(f"DONE {c}: {n} real records saved")
+    try:
+        for commodity in ("Maize", "Soyabean"):
+            count = fetchCommodity(commodity)
+            print(f"{commodity}: {count} records saved")
+    except RuntimeError as err:
+        raise SystemExit(str(err)) from None
