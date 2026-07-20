@@ -24,14 +24,6 @@ export function SectorIcon({ sector, size = 18, className = '' }: { sector: stri
   return <I size={size} className={className} />
 }
 
-export const SECTOR_LABEL: Record<string, string> = {
-  dairy: 'Dairy', poultry: 'Poultry', food_processing: 'Food Processing',
-  handicrafts: 'Handicrafts', rural_retail: 'Rural Retail',
-}
-
-export const fmtINR = (n: number) =>
-  '₹' + Math.round(Math.abs(n)).toLocaleString('en-IN')
-
 /** Animated counter: eases toward its target whenever `value` changes. */
 export function AnimatedNumber({ value, duration = 700, format }:
   { value: number; duration?: number; format?: (n: number) => string }) {

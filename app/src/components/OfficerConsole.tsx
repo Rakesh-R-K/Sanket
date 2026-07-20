@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
+import { sectorLabels } from '../lib/format'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { api, type DistrictRisk, type DistrictSummary, type EnterpriseRow, type LeadTime } from '../lib/api'
-import { AnimatedNumber, SectorIcon, SECTOR_LABEL } from './shared'
+import { AnimatedNumber, SectorIcon } from './shared'
 import { Icon } from './icons'
 import { EnterpriseProfile } from './EnterpriseProfile'
 import { CascadeOverlay, type CascadeResult } from './CascadeOverlay'
+import { pendingCount } from '../lib/offline'
 import { useT, type StringKey } from '../lib/i18n'
 
 const LEVEL_COLOR: Record<string, string> = {
@@ -24,9 +26,9 @@ function Marquee({ d }: { d: DistrictRisk }) {
   const items = d.signals.length
     ? d.signals.map(s => ({ hot: true, text: `${s.commodity.toUpperCase()} ${s.kind.replace('_', ' ').toUpperCase()} · z=${s.magnitude_z}` }))
     : [
-        { hot: false, text: 'MAIZE — district mandis steady' },
-        { hot: false, text: 'SOYBEAN — district mandis steady' },
-        { hot: false, text: 'MONSOON — within climatology' },
+        { hot: false, text: 'MAIZE - district mandis steady' },
+        { hot: false, text: 'SOYBEAN - district mandis steady' },
+        { hot: false, text: 'MONSOON - within climatology' },
       ]
   const row = [...items,
     { hot: false, text: `${d.kpis.total} ENTERPRISES MONITORED` },
@@ -148,25 +150,39 @@ export function OfficerConsole() {
   const [loaded, setLoaded] = useState(false)
   const [cascade, setCascade] = useState<CascadeResult | null>(null)
 
-  const refresh = async (dn = districtName) => {
-    const [r, d, l, ds] = await Promise.all([
-      api.enterprises(dn), api.district(dn), api.leadtime(), api.districts()])
-    setRows(r); setDistrict(d); setLead(l); setAllDistricts(ds); setLoaded(true)
-  }
-  useEffect(() => { setLoaded(false); setBlockFilter(null); void refresh(districtName) }, [districtName])
+  const [error, setError] = useState('')
+  const [confirmReset, setConfirmReset] = useState(false)
+  const reqId = useRef(0)
+  const refresh = useCallback(async (dn = districtName) => {
+    const req = ++reqId.current
+    setError('')
+    try {
+      const [r, d, l, ds] = await Promise.all([
+        api.enterprises(dn), api.district(dn), api.leadtime(), api.districts()])
+      if (req !== reqId.current) return
+      setRows(r); setDistrict(d); setLead(l); setAllDistricts(ds)
+    } catch (err) {
+      if (req === reqId.current) setError(err instanceof Error ? err.message : 'Could not load the district.')
+    } finally { if (req === reqId.current) setLoaded(true) }
+  }, [districtName])
+  useEffect(() => {
+    setLoaded(false); setBlockFilter(null); setRows([]); setDistrict(null)
+    void refresh()
+  }, [refresh])
 
   const runShock = async (key: string, label: string) => {
-    setBusy(label)
-    const result = await api.shock(key)
-    setCascade(result)
-    await refresh()
-    setBusy(null)
+    setBusy(label); setError('')
+    try { setCascade(await api.shock(key)); await refresh() }
+    catch (err) { setError(err instanceof Error ? err.message : 'The scenario failed.') }
+    finally { setBusy(null) }
   }
   const runReset = async () => {
-    setBusy(t('cReset'))
-    await api.reset()
-    await refresh()
-    setSelected(null); setBusy(null)
+    setBusy(t('cReset')); setError('')
+    try {
+      if (await pendingCount()) throw new Error('Sync pending entries before resetting the demo.')
+      await api.reset(); await refresh(); setSelected(null); setConfirmReset(false)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Reset failed.') }
+    finally { setBusy(null) }
   }
 
   if (selected !== null)
@@ -181,6 +197,7 @@ export function OfficerConsole() {
         {cascade && <CascadeOverlay result={cascade} onDone={() => setCascade(null)} />}
       </AnimatePresence>
       {district && <Marquee d={district} />}
+      {error && <div role="alert" className="mx-auto max-w-5xl px-6 py-4 text-sm text-[var(--sig-red)]">{error} <button onClick={() => void refresh()} className="underline">{t('retry')}</button></div>}
 
       {/* ── hero ── */}
       <section className="mx-auto w-full max-w-[1560px] px-6 pb-6 pt-8 md:px-12">
@@ -229,7 +246,7 @@ export function OfficerConsole() {
               <motion.button initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }}
                 onClick={() => setBlockFilter(null)}
                 className="mono rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-1 text-[9px] uppercase tracking-[.2em] text-[var(--lime)]">
-                {blockFilter} — {t('cClear')} ×
+                {blockFilter} - {t('cClear')} ×
               </motion.button>
             )}
           </div>
@@ -261,7 +278,7 @@ export function OfficerConsole() {
                   </div>
                   <div className="mono hidden items-center gap-2 text-[9.5px] uppercase tracking-[.16em] text-[var(--ink-faint)] md:flex">
                     <SectorIcon sector={e.sector} size={13} className="text-[var(--ink-dim)]" />
-                    <span className="truncate">{SECTOR_LABEL[e.sector]} · {e.village}</span>
+                    <span className="truncate">{sectorLabels[e.sector]} · {e.village}</span>
                   </div>
                   <span className="serif-accent justify-self-end text-lg md:text-xl"
                     style={{ color: LEVEL_COLOR[e.risk] }}>
@@ -294,7 +311,7 @@ export function OfficerConsole() {
                     initial={{ opacity: 0, x: 14 }} animate={{ opacity: 1, x: 0 }} transition={{ ...spring, delay: .3 + i * .1 }}>
                     <div className="flex items-center gap-2 text-sm font-bold text-[var(--ink)]">
                       <SectorIcon sector={b.sector} size={14} className="text-[var(--sig-red)]" />
-                      {SECTOR_LABEL[b.sector]}
+                      {sectorLabels[b.sector]}
                       <span className="mono num ml-auto text-[9px] font-bold tracking-[.14em] text-[var(--sig-red)]">
                         {b.stressed_units}/{b.exposed_units} {t('cStressed')}
                       </span>
@@ -325,15 +342,22 @@ export function OfficerConsole() {
                 </motion.button>
               ))}
               <motion.button disabled={!!busy} whileHover={{ scale: 1.04 }} whileTap={{ scale: .95 }}
-                onClick={runReset}
+                onClick={() => setConfirmReset(true)}
                 className="flex items-center gap-2 rounded-full border border-[var(--edge-lit)] px-4 py-2.5 text-xs font-bold text-[var(--ink-dim)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--ink)] disabled:opacity-30">
                 <Icon.refresh size={11} /> {t('cReset')}
               </motion.button>
             </div>
+            {confirmReset && <div className="mt-3 rounded-lg border border-[var(--edge)] p-3 text-sm">
+              <p>{lang === 'hi' ? 'सभी मैनुअल प्रविष्टियाँ, नए उद्यम और अधिकारी नोट मिट जाएँगे।' : 'This removes all manual entries, new enterprises and officer notes.'}</p>
+              <div className="mt-3 flex gap-3">
+                <button disabled={!!busy} onClick={runReset} className="underline">{lang === 'hi' ? 'डेमो रीसेट करें' : 'Reset demo data'}</button>
+                <button onClick={() => setConfirmReset(false)}>{lang === 'hi' ? 'रद्द करें' : 'Cancel'}</button>
+              </div>
+            </div>}
             {busy && (
               <div className="mono mt-3 flex items-center gap-2 text-[9px] uppercase tracking-[.2em] text-[var(--ink-faint)]">
                 <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--edge)] border-t-[var(--lime)]" />
-                {busy} — {t('cRunning')}
+                {busy} - {t('cRunning')}
               </div>
             )}
           </motion.section>
