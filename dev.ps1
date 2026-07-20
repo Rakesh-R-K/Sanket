@@ -1,44 +1,33 @@
 #!/usr/bin/env pwsh
 $ErrorActionPreference = 'Stop'
-
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $apiDir = Join-Path $root 'api'
 $appDir = Join-Path $root 'app'
 $venvPython = Join-Path $apiDir '.venv\Scripts\python.exe'
-$needsInstall = $false
 
-if (-not (Test-Path $venvPython)) {
-    Write-Host "▶ Creating backend virtualenv…"
-    Push-Location $apiDir
-    try {
-        py -3 -m venv .venv
-    } finally {
-        Pop-Location
-    }
-    $needsInstall = $true
+if (-not (Test-Path $venvPython) -or -not (Test-Path (Join-Path $appDir 'node_modules'))) {
+    throw 'Install the API and app dependencies first. See README.md.'
 }
 
-if ($needsInstall) {
-    Write-Host "▶ Installing backend dependencies…"
-    & $venvPython -m pip install -r (Join-Path $apiDir 'requirements.txt')
-}
-
-Write-Host "▶ Seeding pristine demo state…"
 Push-Location $apiDir
 try {
     & $venvPython -m app.seed
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the database.' }
 } finally {
     Pop-Location
 }
 
-Write-Host "▶ Starting API (:8000) and PWA (:5173). Ctrl-C to stop both."
-$backend = Start-Process -FilePath $venvPython -ArgumentList @('-m', 'uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', '8000') -WorkingDirectory $apiDir -PassThru -NoNewWindow
-$frontend = Start-Process -FilePath 'npm.cmd' -ArgumentList @('run', 'dev', '--', '--host') -WorkingDirectory $appDir -PassThru -NoNewWindow
-
+$backend = $null
+$frontend = $null
 try {
-    Wait-Process -Id $backend.Id, $frontend.Id
+    Write-Host 'Starting API at http://127.0.0.1:8000 and app at http://127.0.0.1:5173'
+    $backend = Start-Process -FilePath $venvPython -ArgumentList @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000') -WorkingDirectory $apiDir -PassThru -NoNewWindow
+    $frontend = Start-Process -FilePath 'node' -ArgumentList @('node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173', '--strictPort') -WorkingDirectory $appDir -PassThru -NoNewWindow
+    while (-not $backend.HasExited -and -not $frontend.HasExited) { Start-Sleep -Milliseconds 300 }
 } finally {
-    foreach ($pid in @($backend.Id, $frontend.Id)) {
-        Stop-Process -Id $pid -ErrorAction SilentlyContinue
+    foreach ($proc in @($backend, $frontend)) {
+        if ($null -ne $proc -and -not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue
+        }
     }
 }

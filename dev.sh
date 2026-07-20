@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# One-command dev runner for the demo. Backend on :8000, PWA on :5173.
-# Everything runs on localhost — the demo needs no internet.
-set -e
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+set -euo pipefail
+root="$(cd "$(dirname "$0")" && pwd)"
+pythonPath="$root/api/.venv/bin/python"
 
-echo "▶ Seeding pristine demo state…"
-( cd "$ROOT/api" && .venv/bin/python -m app.seed )
+if [[ ! -x "$pythonPath" || ! -d "$root/app/node_modules" ]]; then
+    echo "Install the API and app dependencies first. See README.md."
+    exit 1
+fi
 
-echo "▶ Starting API (:8000) and PWA (:5173). Ctrl-C to stop both."
-( cd "$ROOT/api" && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 ) &
-API_PID=$!
-( cd "$ROOT/app" && npm run dev -- --host ) &
-APP_PID=$!
-trap "kill $API_PID $APP_PID 2>/dev/null" EXIT
-wait
+(cd "$root/api" && "$pythonPath" -m app.seed)
+
+apiPid=''
+appPid=''
+cleanup() {
+    [[ -z "$apiPid" ]] || kill "$apiPid" 2>/dev/null || true
+    [[ -z "$appPid" ]] || kill "$appPid" 2>/dev/null || true
+    wait || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+echo "Starting API at http://127.0.0.1:8000 and app at http://127.0.0.1:5173"
+(cd "$root/api" && exec "$pythonPath" -m uvicorn app.main:app --host 127.0.0.1 --port 8000) &
+apiPid=$!
+(cd "$root/app" && exec node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort) &
+appPid=$!
+wait -n "$apiPid" "$appPid"
