@@ -3,52 +3,12 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { LangContext, useT, type Lang } from './lib/i18n'
 import { Landing } from './components/Landing'
 import { OfficerConsole } from './components/OfficerConsole'
-import { EnterpriseApp } from './components/EnterpriseApp'
+import { EnterprisePicker } from './components/EnterprisePicker'
 import { Icon } from './components/icons'
 import { drainOutbox } from './lib/offline'
 
 type View = 'landing' | 'officer' | 'enterprise'
 export type Theme = 'dark' | 'light'
-
-/* Enterprise view = full-width showcase scene */
-function EnterpriseScene() {
-  const { t } = useT()
-  const feats = [
-    { icon: 'wifiOff' as const, title: t('sF1t'), sub: t('sF1s') },
-    { icon: 'bell' as const, title: t('sF2t'), sub: t('sF2s') },
-    { icon: 'report' as const, title: t('sF3t'), sub: t('sF3s') },
-  ]
-  return (
-    <div className="mx-auto grid w-full max-w-[1500px] items-center gap-12 px-6 py-10 md:grid-cols-[1fr_minmax(360px,430px)] md:px-12">
-      <div>
-        <div className="kicker">{t('sKicker')}</div>
-        <h2 className="display mt-5 text-[clamp(2rem,4.5vw,3.6rem)] font-extrabold leading-[1.05] tracking-tight">
-          {t('sHl1')}
-          <span className="serif-accent font-normal text-[var(--lime)]">{t('sHl2')}</span>
-        </h2>
-        <div className="mt-8 space-y-5">
-          {feats.map((f, i) => {
-            const I = Icon[f.icon]
-            return (
-              <motion.div key={i} className="flex items-start gap-4"
-                initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: .6, delay: .15 + i * .12, ease: [.22, .8, .22, 1] }}>
-                <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-[var(--edge)] bg-[var(--surface)] text-[var(--lime)]">
-                  <I size={17} />
-                </span>
-                <div>
-                  <div className="text-sm font-bold">{f.title}</div>
-                  <p className="mt-0.5 max-w-[46ch] text-xs leading-relaxed text-[var(--ink-dim)]">{f.sub}</p>
-                </div>
-              </motion.div>
-            )
-          })}
-        </div>
-      </div>
-      <div className="min-w-0"><EnterpriseApp /></div>
-    </div>
-  )
-}
 
 function AppHeader({ view, setView, theme, setTheme }:
   { view: View; setView: (v: View) => void; theme: Theme; setTheme: (t: Theme) => void }) {
@@ -130,7 +90,7 @@ export default function App() {
             transition={{ duration: .5, ease: [.22, .8, .22, 1] }}>
             {view === 'landing' && <Landing onEnter={setView} theme={theme} setTheme={setTheme} />}
             {view === 'officer' && <OfficerConsole />}
-            {view === 'enterprise' && <EnterpriseScene />}
+            {view === 'enterprise' && <EnterprisePicker />}
           </motion.div>
         </AnimatePresence>
       </main>

@@ -7,8 +7,6 @@ import { useT } from '../lib/i18n'
 import { Icon } from './icons'
 import { SaakhReport } from './SaakhReport'
 
-const LAKSHMI_ID = 1
-
 type Tab = 'home' | 'entry' | 'alerts' | 'saakh'
 
 function useOnline() {
@@ -217,7 +215,7 @@ function Alerts({ p, onAction }: { p: Profile; onAction: () => void }) {
   )
 }
 
-export function EnterpriseApp() {
+export function EnterpriseApp({ enterpriseId }: { enterpriseId: number }) {
   const { t, lang } = useT()
   const online = useOnline()
   const [tab, setTab] = useState<Tab>('home')
@@ -227,14 +225,14 @@ export function EnterpriseApp() {
   const pending = entries.filter(row => !row.synced).length
 
   const load = useCallback(async () => {
-    try { setP(await api.profile(LAKSHMI_ID)); setError('') }
+    try { setP(await api.profile(enterpriseId)); setError('') }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not load this enterprise.') }
-  }, [])
+  }, [enterpriseId])
   useEffect(() => {
-    const sub = liveQuery(() => localdb.outbox.where('enterprise_id').equals(LAKSHMI_ID).toArray())
+    const sub = liveQuery(() => localdb.outbox.where('enterprise_id').equals(enterpriseId).toArray())
       .subscribe({ next: rows => setEntries(rows.sort((a, b) => b.id! - a.id!)), error: () => setError('Local storage is unavailable.') })
     return () => sub.unsubscribe()
-  }, [])
+  }, [enterpriseId])
   useEffect(() => {
     void load()
     const reload = () => { void load() }
@@ -243,7 +241,7 @@ export function EnterpriseApp() {
     return () => { window.removeEventListener('sanket-sync', reload); window.removeEventListener('online', reload) }
   }, [load])
 
-  if (tab === 'saakh') return <SaakhReport id={LAKSHMI_ID} onBack={() => setTab('home')} />
+  if (tab === 'saakh') return <SaakhReport id={enterpriseId} onBack={() => setTab('home')} />
 
   const NAV: { key: Tab; icon: keyof typeof Icon; label: string }[] = [
     { key: 'home', icon: 'home', label: t('home') },
@@ -293,7 +291,7 @@ export function EnterpriseApp() {
                 </div>
               </>
             )}
-            {tab === 'entry' && <><EntryForm enterpriseId={LAKSHMI_ID} onSaved={load} /><SavedEntries entries={entries} online={online} /></>}
+            {tab === 'entry' && <><EntryForm enterpriseId={enterpriseId} onSaved={load} /><SavedEntries entries={entries} online={online} /></>}
             {tab === 'alerts' && <Alerts p={p} onAction={load} />}
           </>
         ) : (

@@ -6,6 +6,8 @@ export interface EnterpriseRow {
   top_reason: { text_en: string; text_hi: string } | null
 }
 
+export interface EnterpriseInput { name: string; sector: string; village: string; block: string; district: string; members: number }
+
 export interface Reason { code: string; text_en: string; text_hi: string }
 export interface Suggestion { id: number; text_en: string; text_hi: string; action_status: string }
 export interface Flag {
@@ -76,6 +78,7 @@ function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
+  createEnterprise: (data: EnterpriseInput) => post<{ id: number }>('/enterprises', data),
   districts: () => request<DistrictSummary[]>('/districts'),
   enterprises: (district = 'Wardha') => request<EnterpriseRow[]>(`/enterprises?district=${encodeURIComponent(district)}`),
   profile: (id: number) => request<Profile>(`/enterprises/${id}`),
