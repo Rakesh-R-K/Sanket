@@ -1,50 +1,91 @@
-"""Sanket API. Auto-documented at /docs (the DPG/open-API story, for free)."""
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from contextlib import asynccontextmanager, closing
+from datetime import date, datetime
+from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import db
 from .engine import monthly_net
 from .shocks import SHOCKS, inject, reset_and_recascade
 
-app = FastAPI(title="Sanket API",
-              description="Early-warning & cash-flow intelligence for rural "
-                          "micro enterprises. NABARD Hackathon @ GFF 2026.",
-              version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"])
+@asynccontextmanager
+async def lifespan(app):
+    db.initDb()
+    yield
+
+
+app = FastAPI(title="Sanket API", version="0.1.0", lifespan=lifespan)
+allowedOrigins = {f"http://{host}:{port}" for host in ("localhost", "127.0.0.1")
+                  for port in (5173, 4173, 8000)}
+app.add_middleware(CORSMiddleware, allow_origins=sorted(allowedOrigins),
+                   allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
+
+
+@app.middleware("http")
+async def guardWrites(req: Request, callNext):
+    if req.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = req.headers.get("origin")
+        if (origin is not None and origin not in allowedOrigins) or req.headers.get("sec-fetch-site") == "cross-site":
+            return JSONResponse({"detail": "writes are only allowed from the local app"}, status_code=403)
+    return await callNext(req)
 
 LEVEL_RANK = {"alert": 0, "warning": 1, "watch": 2, None: 3}
 
 
-class TxnIn(BaseModel):
-    enterprise_id: int
-    type: str
-    amount: float
-    note: str = ""
-    entered_at: str
-    source: str = "manual"
+class Input(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid", allow_inf_nan=False)
 
 
-class EnterpriseIn(BaseModel):
-    name: str
-    sector: str
-    village: str
-    block: str
-    district: str = "Wardha"
-    members: int = 1
+class TxnIn(Input):
+    enterpriseId: int = Field(alias="enterprise_id", gt=0)
+    type: Literal["income", "expense", "savings", "loan_repayment"]
+    amount: float = Field(gt=0, le=100_000_000, multiple_of=0.01)
+    note: str = Field(default="", max_length=500)
+    enteredAt: date = Field(alias="entered_at")
+    source: Literal["manual"] = "manual"
+
+    @field_validator("enteredAt")
+    @classmethod
+    def checkDate(cls, value):
+        if not date(2000, 1, 1) <= value <= date.today():
+            raise ValueError("date must be between 2000-01-01 and today")
+        return value
 
 
-class InterventionIn(BaseModel):
-    enterprise_id: int
-    flag_id: int | None = None
-    officer_note: str
-    outcome: str = ""
+class EnterpriseIn(Input):
+    name: str = Field(min_length=1, max_length=120)
+    sector: Literal["dairy", "poultry", "food_processing", "handicrafts", "rural_retail"]
+    village: str = Field(min_length=1, max_length=80)
+    block: str = Field(min_length=1, max_length=80)
+    district: Literal["Wardha", "Nagpur", "Amravati", "Yavatmal"] = "Wardha"
+    members: int = Field(default=1, ge=1, le=500)
+
+
+class InterventionIn(Input):
+    enterpriseId: int = Field(alias="enterprise_id", gt=0)
+    flagId: int | None = Field(default=None, alias="flag_id", gt=0)
+    officerNote: str = Field(alias="officer_note", min_length=1, max_length=2000)
+    outcome: str = Field(default="", max_length=1000)
+    resolve: bool = False
+
+    @model_validator(mode="after")
+    def checkResolution(self):
+        if self.resolve and not self.flagId:
+            raise ValueError("choose a flag to resolve")
+        return self
+
+
+def requireEnterprise(con, eid):
+    if not con.execute("SELECT 1 FROM enterprises WHERE id=?", (eid,)).fetchone():
+        raise HTTPException(404, "enterprise not found")
 
 
 def _flags_with_reasons(con, enterprise_id: int) -> list[dict]:
@@ -84,24 +125,16 @@ def list_districts():
 
 @app.post("/enterprises", status_code=201)
 def create_enterprise(e: EnterpriseIn):
-    """Onboard a new (thin-file) enterprise. It gets a forecast immediately
-    via the sector prior - the cold-start answer, live from day zero."""
-    valid = {"dairy", "poultry", "food_processing", "handicrafts", "rural_retail"}
-    if e.sector not in valid:
-        raise HTTPException(400, f"sector must be one of {sorted(valid)}")
-    con = db.connect()
-    cur = con.execute(
-        "INSERT INTO enterprises(name, sector, village, block, district,"
-        " members, started_at) VALUES (?,?,?,?,?,?,?)",
-        (e.name, e.sector, e.village, e.block, e.district, e.members,
-         datetime.now().date().isoformat()))
-    eid = cur.lastrowid
-    con.commit()
     from .engine import forecast_enterprise
-    fc = forecast_enterprise(con, eid, e.sector, active_signals=[])
-    con.close()
-    return {"id": eid, "forecast_model": fc.get("model_tag", "sector_prior_v1")
-            if fc else None, "note": "forecast available from day zero via sector prior"}
+    with closing(db.connect()) as con, con:
+        cur = con.execute(
+            "INSERT INTO enterprises(name, sector, village, block, district,"
+            " members, started_at) VALUES (?,?,?,?,?,?,?)",
+            (e.name, e.sector, e.village, e.block, e.district, e.members,
+             date.today().isoformat()))
+        eid = cur.lastrowid
+        fc = forecast_enterprise(con, eid, e.sector, active_signals=[])
+    return {"id": eid, "forecast_model": fc.get("model_tag") if fc else None}
 
 
 @app.get("/enterprises")
@@ -233,40 +266,42 @@ def district_risk(district: str):
 
 
 @app.post("/transactions/batch")
-def add_transactions(txns: list[TxnIn]):
-    """Outbox sync endpoint for the offline PWA."""
-    con = db.connect()
-    con.executemany(
-        "INSERT INTO transactions(enterprise_id, type, amount, note,"
-        " entered_at, source) VALUES (?,?,?,?,?,?)",
-        [(t.enterprise_id, t.type, t.amount, t.note, t.entered_at, t.source)
-         for t in txns])
-    con.commit()
-    con.close()
+def add_transactions(txns: Annotated[list[TxnIn], Body(min_length=1, max_length=100)]):
+    with closing(db.connect()) as con, con:
+        for eid in {t.enterpriseId for t in txns}:
+            requireEnterprise(con, eid)
+        con.executemany(
+            "INSERT INTO transactions(enterprise_id, type, amount, note,"
+            " entered_at, source) VALUES (?,?,?,?,?,?)",
+            [(t.enterpriseId, t.type, t.amount, t.note, t.enteredAt.isoformat(), "manual")
+             for t in txns])
     return {"synced": len(txns)}
 
 
 @app.post("/interventions")
 def log_intervention(iv: InterventionIn):
-    con = db.connect()
-    con.execute(
-        "INSERT INTO interventions(enterprise_id, flag_id, officer_note,"
-        " logged_at, outcome) VALUES (?,?,?,?,?)",
-        (iv.enterprise_id, iv.flag_id, iv.officer_note,
-         datetime.now().isoformat(timespec="seconds"), iv.outcome))
-    if iv.flag_id:
-        con.execute("UPDATE flags SET status='resolved' WHERE id=?", (iv.flag_id,))
-    con.commit()
-    con.close()
+    with closing(db.connect()) as con, con:
+        requireEnterprise(con, iv.enterpriseId)
+        if iv.flagId and not con.execute(
+                "SELECT 1 FROM flags WHERE id=? AND enterprise_id=?",
+                (iv.flagId, iv.enterpriseId)).fetchone():
+            raise HTTPException(404, "flag not found for this enterprise")
+        con.execute(
+            "INSERT INTO interventions(enterprise_id, flag_id, officer_note,"
+            " logged_at, outcome) VALUES (?,?,?,?,?)",
+            (iv.enterpriseId, iv.flagId, iv.officerNote,
+             datetime.now().isoformat(timespec="seconds"), iv.outcome))
+        if iv.resolve:
+            con.execute("UPDATE flags SET status='resolved' WHERE id=?", (iv.flagId,))
     return {"ok": True}
 
 
 @app.post("/suggestions/{sid}/done")
 def suggestion_done(sid: int):
-    con = db.connect()
-    con.execute("UPDATE suggestions SET action_status='done' WHERE id=?", (sid,))
-    con.commit()
-    con.close()
+    with closing(db.connect()) as con, con:
+        cur = con.execute("UPDATE suggestions SET action_status='done' WHERE id=?", (sid,))
+        if not cur.rowcount:
+            raise HTTPException(404, "suggestion not found")
     return {"ok": True}
 
 
