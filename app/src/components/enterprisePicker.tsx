@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { api, type EnterpriseInput } from '../lib/api'
 import { sectorLabels } from '../lib/format'
 import { useT } from '../lib/i18n'
-import { EnterpriseApp } from './EnterpriseApp'
+import { EnterpriseApp } from './enterpriseApp'
 
 const districts = ['Wardha', 'Nagpur', 'Amravati', 'Yavatmal'] as const
 
@@ -53,7 +53,7 @@ export function EnterprisePicker() {
   }
 
   return <div className="mx-auto w-full max-w-3xl p-4">
-    <section className="mb-5 space-y-4">
+    <section className="no-print mb-5 space-y-4">
       <h1 className="text-2xl font-semibold">{label('Enterprise records', 'उद्यम के रिकॉर्ड')}</h1>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">{label('District', 'जिला')}

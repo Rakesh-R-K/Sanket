@@ -1,5 +1,3 @@
-// Demo insurance: if any component throws (animation edge case, bad data),
-// render a graceful shell with a reload button instead of a blank page.
 import { Component, type ReactNode } from 'react'
 
 export class ErrorBoundary extends Component<
@@ -22,19 +20,15 @@ export class ErrorBoundary extends Component<
         <div>
           <div className="kicker justify-center">Sanket</div>
           <h1 className="display mt-4 text-3xl font-extrabold text-[var(--ink)]">
-            Something glitched — the data is safe.
+            Could not display this view.
           </h1>
           <p className="mx-auto mt-3 max-w-md text-sm text-[var(--ink-dim)]">
-            A display component failed to render. Reloading restores the view;
-            all entries and flags live in the database, untouched.
+            Reload the app to try again. Check the local server if this keeps happening.
           </p>
           <button onClick={() => location.reload()}
             className="mt-6 rounded-full bg-[var(--lime)] px-6 py-3 text-sm font-bold text-[#111] transition-transform hover:scale-105">
             Reload
           </button>
-          <pre className="mono mx-auto mt-6 max-w-lg overflow-auto rounded-lg border border-[var(--edge)] bg-[var(--surface)] p-3 text-left text-[10px] text-[var(--ink-faint)]">
-            {String(this.state.error)}
-          </pre>
         </div>
       </div>
     )

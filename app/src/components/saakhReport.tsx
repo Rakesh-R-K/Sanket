@@ -5,7 +5,7 @@ import { Icon } from './icons'
 
 type SaakhData = Awaited<ReturnType<typeof api.saakh>>
 
-// Tiny inline sparkline: 24 months of net cash flow, pure SVG (prints well)
+// svg keeps the printed chart sharp
 function Spark({ values }: { values: number[] }) {
   if (!values.length) return null
   const w = 640, h = 80
@@ -17,6 +17,7 @@ function Spark({ values }: { values: number[] }) {
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ height: 80 }}>
       <line x1="0" y1={zero} x2={w} y2={zero} stroke="#d1d5db" strokeDasharray="4 4" />
+      <circle cx={x(0)} cy={y(values[0])} r={values.length === 1 ? 3 : 0} fill="#166534" />
       <path d={path} fill="none" stroke="#166534" strokeWidth="2.5" />
     </svg>
   )
@@ -36,7 +37,7 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
 
   return (
     <div className="mx-auto max-w-3xl p-4">
-      <div className="no-print rise mb-3 flex gap-2">
+      <div className="no-print mb-3 flex gap-2">
         <button onClick={onBack}
           className="flex items-center gap-1 rounded-lg border border-[var(--edge)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text-dim)] transition hover:border-[var(--edge-lit)] hover:text-[var(--text)]">
           <Icon.chevronLeft size={14} /> Back
@@ -47,8 +48,7 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
         </button>
       </div>
 
-      <div id="saakh-report" className="paper rise rise-1 border-2 !border-green-900 p-4 sm:p-8">
-        {/* header */}
+      <div id="saakh-report" className="paper border-2 !border-green-900 p-4 sm:p-8">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b-4 border-green-900 pb-4">
           <div>
             <div className="text-2xl font-black tracking-wide text-green-900">SAAKH रिपोर्ट</div>
@@ -60,9 +60,7 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
             <div>Local demo report</div>
           </div>
         </div>
-
-        {/* 1. identity */}
-        <section className="mt-4 grid grid-cols-2 gap-4 text-sm">
+        <section className="mt-4 grid gap-4 sm:grid-cols-2 text-sm">
           <div>
             <div className="text-xs font-bold uppercase text-stone-400">Enterprise</div>
             <div className="font-bold">{d.name}</div>
@@ -72,14 +70,12 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
           <div>
             <div className="text-xs font-bold uppercase text-stone-400">Track record</div>
             <div>{disc.active_months} months of records · {disc.entries} entries</div>
-            <div>First entry: {String(disc.first_entry).slice(0, 10)}</div>
+            <div>First entry: {disc.first_entry ? String(disc.first_entry).slice(0, 10) : 'No entries yet'}</div>
             {d.loan && <div>Current loan: {fmtINR(d.loan.principal)} ({d.loan.lender}), EMI {fmtINR(d.loan.emi)}</div>}
           </div>
         </section>
-
-        {/* 2. cash-flow summary */}
         <section className="mt-5">
-          <div className="text-xs font-bold uppercase text-stone-400">24-month net cash flow</div>
+          <div className="text-xs font-bold uppercase text-stone-400">Recorded net cash flow</div>
           <Spark values={nets} />
           <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4 text-center text-sm">
             <div className="rounded bg-green-50 p-2">
@@ -100,8 +96,6 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
             </div>
           </div>
         </section>
-
-        {/* 3. forecast */}
         <section className="mt-5 text-sm">
           <div className="text-xs font-bold uppercase text-stone-400">6-month outlook (Sanket forecast)</div>
           <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -118,8 +112,6 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
             </p>
           )}
         </section>
-
-        {/* 4. resilience history */}
         <section className="mt-5 text-sm">
           <div className="text-xs font-bold uppercase text-stone-400">Officer notes</div>
           {d.interventions.length ? (
@@ -132,18 +124,14 @@ export function SaakhReport({ id, onBack }: { id: number; onBack: () => void }) 
             <p className="text-xs text-stone-500">No officer notes recorded.</p>
           )}
         </section>
-
-        {/* 5. open risk, transparent */}
         {d.flags.length > 0 && (
           <section className="mt-5 text-sm">
-            <div className="text-xs font-bold uppercase text-stone-400">Current risk factors (disclosed transparently)</div>
+            <div className="text-xs font-bold uppercase text-stone-400">Open risk flags</div>
             <ul className="mt-1 space-y-0.5 text-xs">
               {d.flags.flatMap(f => f.reasons).map((r, i) => <li key={i}>– {r.text_en}</li>)}
             </ul>
           </section>
         )}
-
-        {/* footer */}
         <div className="mt-6 border-t pt-3 text-[10px] leading-relaxed text-stone-500">
           {d.disclaimer_en}
         </div>

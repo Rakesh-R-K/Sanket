@@ -7,7 +7,7 @@ import {
 import { api, type Profile } from '../lib/api'
 import { RiskBadge, SectorIcon } from './shared'
 import { Icon } from './icons'
-import { SaakhReport } from './SaakhReport'
+import { SaakhReport } from './saakhReport'
 import { useT } from '../lib/i18n'
 
 function CashFlowChart({ p }: { p: Profile }) {
@@ -34,12 +34,10 @@ function CashFlowChart({ p }: { p: Profile }) {
         <ReferenceLine y={0} stroke="var(--edge-lit)" strokeDasharray="4 4" />
         <Area dataKey="range" name="Indicative range" stroke="none" fill="var(--sig-green)" fillOpacity={0.12} isAnimationActive={false} />
         <Line dataKey="net" stroke="var(--sig-green)" dot={false} strokeWidth={2}
-          name="Net (history)" isAnimationActive animationDuration={1000}
-          style={{ filter: 'drop-shadow(0 0 4px var(--sig-green-glow))' }} />
+          name="Net (history)" isAnimationActive={false} />
         <Line dataKey="forecast" stroke="var(--sig-amber)" strokeDasharray="6 3"
           dot={{ r: 2.5, fill: 'var(--sig-amber)' }} strokeWidth={2}
-          name="Forecast" isAnimationActive animationDuration={900} animationBegin={500}
-          style={{ filter: 'drop-shadow(0 0 4px var(--sig-amber-glow))' }} />
+          name="Forecast" isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   )
@@ -84,7 +82,7 @@ export function EnterpriseProfile({ id, onBack }: { id: number; onBack: () => vo
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-4">
       {error && <p role="alert" className="text-sm text-[var(--sig-red)]">{error}</p>}
-      <div className="rise flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button onClick={onBack}
           className="flex items-center gap-1 rounded-lg border border-[var(--edge)] bg-[var(--surface)] px-2.5 py-1.5 text-sm text-[var(--text-dim)] transition hover:border-[var(--edge-lit)] hover:text-[var(--text)]">
           <Icon.chevronLeft size={14} /> {t('back')}
@@ -108,16 +106,16 @@ export function EnterpriseProfile({ id, onBack }: { id: number; onBack: () => vo
         </div>
       </div>
 
-      <section className="panel rise rise-1 scanning">
+      <section className="panel">
         <div className="panel-head">
           <Icon.signal size={11} className="lit" /> {t('pChart')}
-          {p.forecast && <span className="mono ml-auto normal-case tracking-normal text-[var(--text-faint)]">model: {p.forecast.model_tag}</span>}
+          {p.forecast && <span className="mono ml-auto normal-case tracking-normal text-[var(--text-faint)]">{lang === 'hi' ? 'सीमा की सटीकता मापी नहीं गई' : 'Range coverage is not measured'}</span>}
         </div>
         <div className="p-3"><CashFlowChart p={p} /></div>
       </section>
 
       {p.flags.length > 0 && (
-        <section className="panel rise rise-2">
+        <section className="panel">
           <div className="panel-head"><Icon.alert size={11} className="text-[var(--sig-amber)]" /> {t('pWhy')}</div>
           <div className="p-4">
             {p.flags.map(f => (
@@ -126,7 +124,7 @@ export function EnterpriseProfile({ id, onBack }: { id: number; onBack: () => vo
                   <RiskBadge risk={f.level} small />
                   <span className="mono text-[10px] text-[var(--text-faint)]">{t('pOpened')} {f.opened_at}</span>
                 </div>
-                <ul className="stagger space-y-1.5">
+                <ul className="space-y-1.5">
                   {f.reasons.map((r, i) => (
                     <li key={i} className="flex gap-2 text-sm text-[var(--text-dim)]">
                       <Icon.arrowRight size={13} className="mt-1 shrink-0 text-[var(--sig-amber)]" />
@@ -140,7 +138,7 @@ export function EnterpriseProfile({ id, onBack }: { id: number; onBack: () => vo
         </section>
       )}
 
-      <section className="panel rise rise-3">
+      <section className="panel">
         <div className="panel-head"><Icon.check size={11} className="lit" /> {t('pLog')}</div>
         <div className="p-4">
           {logged && (
@@ -177,12 +175,12 @@ export function EnterpriseProfile({ id, onBack }: { id: number; onBack: () => vo
         </div>
       </section>
 
-      <section className="panel rise rise-4">
+      <section className="panel">
         <div className="panel-head"><Icon.database size={11} className="lit" /> {t('pRecent')}</div>
         <div className="grid gap-0.5 p-4 pt-2 text-xs">
           {p.recent_transactions.slice(0, 10).map((t, i) => (
-            <div key={i} className="flex items-center justify-between border-b border-[var(--edge)]/40 py-1.5 last:border-0">
-              <span className="flex items-center gap-2 text-[var(--text-dim)]">
+            <div key={i} className="flex flex-wrap items-start justify-between gap-2 break-words border-b border-[var(--edge)]/40 py-1.5 last:border-0">
+              <span className="flex min-w-0 flex-1 items-start gap-2 text-[var(--text-dim)]">
                 {t.type === 'income'
                   ? <Icon.income size={12} className="text-[var(--sig-green)]" />
                   : <Icon.expense size={12} className="text-[var(--text-faint)]" />}

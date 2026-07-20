@@ -12,8 +12,8 @@ export default defineConfig({
       manifest: {
         name: 'Sanket - rural cash flow',
         short_name: 'Sanket',
-        theme_color: '#166534',
-        background_color: '#fafaf5',
+        theme_color: '#111816',
+        background_color: '#111816',
         display: 'standalone',
         icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' }],
       },

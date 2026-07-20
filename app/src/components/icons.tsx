@@ -1,4 +1,4 @@
-// Professional SVG icon system — replaces all emoji. Stroke-based, inherits
+// Professional SVG icon system - replaces all emoji. Stroke-based, inherits
 // currentColor, consistent 24px grid (lucide-style geometry, hand-rolled to
 // keep the bundle dependency-free).
 interface IconProps { size?: number; className?: string; strokeWidth?: number }
