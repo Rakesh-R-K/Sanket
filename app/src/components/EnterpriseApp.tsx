@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { fmtINR, today } from '../lib/format'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { liveQuery } from 'dexie'
 import { api, type Profile } from '../lib/api'
-import { recordTxn, pendingCount, drainOutbox } from '../lib/offline'
+import { recordTxn, localdb, drainOutbox, type LocalTxn } from '../lib/offline'
 import { useT } from '../lib/i18n'
-import { fmtINR } from './shared'
 import { Icon } from './icons'
 import { SaakhReport } from './SaakhReport'
 
@@ -20,60 +21,97 @@ function useOnline() {
   return online
 }
 
-const TYPE_ICON = { income: Icon.income, expense: Icon.expense, savings: Icon.savings, loan_repayment: Icon.loan } as const
+const typeIcons = { income: Icon.income, expense: Icon.expense, savings: Icon.savings, loan_repayment: Icon.loan } as const
 
-function EntryForm({ onSaved }: { onSaved: () => void }) {
+function EntryForm({ enterpriseId, onSaved }: { enterpriseId: number; onSaved: () => void }) {
   const { t } = useT()
-  const online = useOnline()
-  const [type, setType] = useState<'income' | 'expense' | 'savings' | 'loan_repayment'>('income')
+  const [type, setType] = useState<LocalTxn['type']>('income')
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
+  const [date, setDate] = useState(today)
   const [msg, setMsg] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const types = ['income', 'expense', 'savings', 'loan_repayment'] as const
 
-  const save = async () => {
-    const n = Number(amount)
-    if (!n || n <= 0) return
-    await recordTxn({
-      enterprise_id: LAKSHMI_ID, type, amount: n, note,
-      entered_at: new Date().toISOString().slice(0, 10),
-    })
-    setAmount(''); setNote('')
-    setMsg(online ? t('savedOnline') : t('savedOffline'))
-    setTimeout(() => setMsg(''), 3500)
-    onSaved()
+  const save = async (ev: FormEvent) => {
+    ev.preventDefault()
+    if (saving) return
+    setSaving(true); setError(''); setMsg('')
+    try {
+      await recordTxn({ enterprise_id: enterpriseId, type, amount: Number(amount), note: note.trim(), entered_at: date })
+      setAmount(''); setNote(''); setMsg(t('savedLocal'))
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('saveFailed'))
+    } finally { setSaving(false) }
   }
 
-  const types = ['income', 'expense', 'savings', 'loan_repayment'] as const
   return (
-    <div className="stagger space-y-3 p-4">
-      <div className="grid grid-cols-2 gap-2">
-        {types.map(k => {
-          const I = TYPE_ICON[k]
-          return (
-            <button key={k} onClick={() => setType(k)}
-              className={`flex items-center gap-2 rounded-xl border-2 p-3 text-sm font-semibold transition-all active:scale-95 ${type === k ? 'border-[var(--p-good)] bg-[var(--p-good-soft)] text-[var(--p-ink)]' : 'border-[var(--p-edge)] bg-[var(--p-card)] text-[var(--p-ink)]'}`}>
-              <I size={16} className={type === k ? 'text-[var(--p-good)]' : 'text-[var(--p-dim)]'} />
-              {t(k)}
+    <form onSubmit={save} className="space-y-3 p-4">
+      <fieldset>
+        <legend className="mb-2 text-sm font-semibold">{t('entryType')}</legend>
+        <div className="grid grid-cols-2 gap-2">
+          {types.map(key => {
+            const I = typeIcons[key]
+            return <button type="button" key={key} onClick={() => setType(key)} aria-pressed={type === key}
+              className={`flex items-center gap-2 rounded-lg border p-3 text-sm ${type === key ? 'border-[var(--p-good)] bg-[var(--p-good-soft)]' : 'border-[var(--p-edge)]'}`}>
+              <I size={16} />{t(key)}
             </button>
-          )
-        })}
-      </div>
-      <input inputMode="numeric" value={amount} onChange={e => setAmount(e.target.value.replace(/\D/g, ''))}
-        placeholder={t('amount')}
-        className="num w-full rounded-xl border-2 border-[var(--p-edge)] p-3 text-lg outline-none transition focus:border-[var(--p-good)]" />
-      <input value={note} onChange={e => setNote(e.target.value)} placeholder={t('note')}
-        className="w-full rounded-xl border-2 border-[var(--p-edge)] p-3 text-sm outline-none transition focus:border-[var(--p-good)]" />
-      <button onClick={save}
-        className="w-full rounded-xl bg-[var(--p-good)] p-3.5 text-lg font-bold text-white shadow-md transition hover:bg-green-900 active:scale-[.98]">
-        {t('save')}
-      </button>
-      {msg && (
-        <div className="fade flex items-center justify-center gap-2 rounded-lg bg-[var(--p-good-soft)] p-2.5 text-sm text-[var(--p-good)]">
-          <Icon.check size={14} /> {msg}
+          })}
         </div>
-      )}
-    </div>
+      </fieldset>
+      <label className="block text-sm" htmlFor="entry-amount">{t('amount')}</label>
+      <input id="entry-amount" name="amount" type="number" inputMode="decimal" min="0.01" max="100000000" step="0.01" required
+        value={amount} onChange={ev => setAmount(ev.target.value)} className="w-full rounded-lg border border-[var(--p-edge)] p-3" />
+      <label className="block text-sm" htmlFor="entry-date">{t('entryDate')}</label>
+      <input id="entry-date" name="date" type="date" required min="2000-01-01" max={today()} value={date}
+        onChange={ev => setDate(ev.target.value)} className="w-full rounded-lg border border-[var(--p-edge)] p-3" />
+      <label className="block text-sm" htmlFor="entry-note">{t('note')}</label>
+      <input id="entry-note" name="note" maxLength={500} value={note} onChange={ev => setNote(ev.target.value)}
+        className="w-full rounded-lg border border-[var(--p-edge)] p-3" />
+      <button disabled={saving} className="w-full rounded-lg bg-[var(--p-good)] p-3 font-semibold text-white disabled:opacity-50">
+        {saving ? t('saving') : t('save')}
+      </button>
+      {msg && <p role="status" className="text-sm text-[var(--p-good)]">{msg}</p>}
+      {error && <p role="alert" className="text-sm text-[var(--sig-red)]">{error}</p>}
+    </form>
   )
+}
+
+function SavedEntries({ entries, online }: { entries: LocalTxn[]; online: boolean }) {
+  const { t } = useT()
+  const [syncing, setSyncing] = useState(false)
+  const [error, setError] = useState('')
+  const pending = entries.filter(row => !row.synced)
+  const recent = [...pending, ...entries.filter(row => row.synced).slice(0, 5)]
+  const retry = async () => {
+    setSyncing(true); setError('')
+    try { await drainOutbox() }
+    catch { setError(t('saveFailed')) }
+    finally { setSyncing(false) }
+  }
+  return <section className="border-t border-[var(--p-edge)] p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 className="text-sm font-semibold">{t('savedEntries')}</h3>
+      {pending.length > 0 && <button type="button" disabled={!online || syncing} onClick={retry}
+        className="rounded border border-[var(--p-edge)] px-3 py-2 text-xs disabled:opacity-50">
+        {syncing ? t('syncing') : t('retrySync')}
+      </button>}
+    </div>
+    {!recent.length && <p className="mt-2 text-sm text-[var(--p-dim)]">{t('noEntries')}</p>}
+    <ol className="mt-2 space-y-3" aria-live="polite">
+      {recent.map(row => <li key={row.id} className="border-t border-[var(--p-edge)] pt-3 text-sm">
+        <div className="flex flex-wrap justify-between gap-2"><span>{t(row.type)} · {row.entered_at}</span><strong>{fmtINR(row.amount)}</strong></div>
+        {row.note && <p className="mt-1 break-words text-[var(--p-dim)]">{row.note}</p>}
+        <p className={`mt-1 text-xs ${row.error ? 'text-[var(--sig-red)]' : 'text-[var(--p-good)]'}`}>
+          {row.synced ? t('synced') : row.error ? t('syncFailed') : t('pending')}
+        </p>
+        {row.error && !row.synced && <p className="mt-1 text-xs text-[var(--p-dim)]">{row.error}</p>}
+      </li>)}
+    </ol>
+    {error && <p role="alert" className="mt-2 text-sm text-[var(--sig-red)]">{error}</p>}
+  </section>
 }
 
 function HealthCard({ p }: { p: Profile }) {
@@ -125,6 +163,14 @@ function HealthCard({ p }: { p: Profile }) {
 
 function Alerts({ p, onAction }: { p: Profile; onAction: () => void }) {
   const { t, pick } = useT()
+  const [busy, setBusy] = useState<number | null>(null)
+  const [error, setError] = useState('')
+  const done = async (id: number) => {
+    setBusy(id); setError('')
+    try { await api.suggestionDone(id); onAction() }
+    catch (err) { setError(err instanceof Error ? err.message : 'Could not save this action.') }
+    finally { setBusy(null) }
+  }
   const flags = p.flags
   if (!flags.length)
     return (
@@ -135,6 +181,7 @@ function Alerts({ p, onAction }: { p: Profile; onAction: () => void }) {
     )
   return (
     <div className="stagger space-y-3 p-4">
+      {error && <p role="alert" className="text-sm text-[var(--sig-red)]">{error}</p>}
       {flags.map(f => (
         <div key={f.id} className="day-card !border-[var(--p-warn-border)] p-4">
           <div className="mb-2 flex items-center gap-1.5 text-sm font-bold text-[var(--p-warn)]">
@@ -156,7 +203,7 @@ function Alerts({ p, onAction }: { p: Profile; onAction: () => void }) {
                   <p className="flex-1 text-sm text-[var(--p-ink)]">{pick(s)}</p>
                   {s.action_status === 'done'
                     ? <Icon.check size={15} className="mt-0.5 shrink-0 text-[var(--p-good)]" />
-                    : <button onClick={() => api.suggestionDone(s.id).then(onAction)}
+                    : <button disabled={busy !== null} onClick={() => void done(s.id)}
                         className="shrink-0 rounded-md bg-[var(--p-good)] px-2.5 py-1 text-xs font-semibold text-white transition hover:opacity-90 active:scale-95">
                         {t('markDone')}
                       </button>}
@@ -175,14 +222,26 @@ export function EnterpriseApp() {
   const online = useOnline()
   const [tab, setTab] = useState<Tab>('home')
   const [p, setP] = useState<Profile | null>(null)
-  const [pending, setPending] = useState(0)
+  const [entries, setEntries] = useState<LocalTxn[]>([])
+  const [error, setError] = useState('')
+  const pending = entries.filter(row => !row.synced).length
 
-  const load = async () => {
-    try { setP(await api.profile(LAKSHMI_ID)) } catch { /* offline: cached shell */ }
-    setPending(await pendingCount())
-  }
-  useEffect(() => { void load() }, [])
-  useEffect(() => { if (online) void drainOutbox().then(load) }, [online])
+  const load = useCallback(async () => {
+    try { setP(await api.profile(LAKSHMI_ID)); setError('') }
+    catch (err) { setError(err instanceof Error ? err.message : 'Could not load this enterprise.') }
+  }, [])
+  useEffect(() => {
+    const sub = liveQuery(() => localdb.outbox.where('enterprise_id').equals(LAKSHMI_ID).toArray())
+      .subscribe({ next: rows => setEntries(rows.sort((a, b) => b.id! - a.id!)), error: () => setError('Local storage is unavailable.') })
+    return () => sub.unsubscribe()
+  }, [])
+  useEffect(() => {
+    void load()
+    const reload = () => { void load() }
+    window.addEventListener('sanket-sync', reload)
+    window.addEventListener('online', reload)
+    return () => { window.removeEventListener('sanket-sync', reload); window.removeEventListener('online', reload) }
+  }, [load])
 
   if (tab === 'saakh') return <SaakhReport id={LAKSHMI_ID} onBack={() => setTab('home')} />
 
@@ -213,6 +272,7 @@ export function EnterpriseApp() {
       </div>
 
       <div className="flex-1 overflow-y-auto" key={tab}>
+        {error && <div role="alert" className="p-4 text-sm text-[var(--sig-red)]">{error} <button onClick={load} className="underline">{t('retry')}</button></div>}
         {p ? (
           <>
             {tab === 'home' && (
@@ -233,7 +293,7 @@ export function EnterpriseApp() {
                 </div>
               </>
             )}
-            {tab === 'entry' && <EntryForm onSaved={load} />}
+            {tab === 'entry' && <><EntryForm enterpriseId={LAKSHMI_ID} onSaved={load} /><SavedEntries entries={entries} online={online} /></>}
             {tab === 'alerts' && <Alerts p={p} onAction={load} />}
           </>
         ) : (
@@ -266,7 +326,7 @@ export function EnterpriseApp() {
         })}
       </nav>
       <div className="bg-[var(--p-card)] pb-1.5 text-center text-[9px] text-[var(--p-faint)]">
-        {lang === 'hi' ? 'संकेत — नाबार्ड हैकाथॉन' : 'Sanket — NABARD Hackathon'}
+        {lang === 'hi' ? 'संकेत - नाबार्ड हैकाथॉन' : 'Sanket - NABARD Hackathon'}
       </div>
     </div>
   )

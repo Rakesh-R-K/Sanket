@@ -1,4 +1,3 @@
-// Types mirror the FastAPI payloads (single source: /docs)
 export type Risk = 'alert' | 'warning' | 'watch' | 'healthy'
 
 export interface EnterpriseRow {
@@ -22,6 +21,7 @@ export interface Profile extends Omit<EnterpriseRow, 'risk' | 'reason_count' | '
   flags: Flag[]
   recent_transactions: { type: string; amount: number; note: string; entered_at: string; source: string }[]
   interventions: { officer_note: string; logged_at: string; outcome: string }[]
+  action_history: { id: number; text_en: string; text_hi: string; action_status: string; opened_at: string }[]
 }
 export interface Bulletin {
   sector: string; driver: string; z: number
@@ -42,28 +42,49 @@ export interface LeadTime {
   target_days: number
 }
 
-const BASE = '/api'
-
-async function get<T>(path: string): Promise<T> {
-  const r = await fetch(BASE + path)
-  if (!r.ok) throw new Error(`${r.status} ${path}`)
-  return r.json()
+export interface TxnInput {
+  client_id: string
+  enterprise_id: number
+  type: 'income' | 'expense' | 'savings' | 'loan_repayment'
+  amount: number
+  note: string
+  entered_at: string
+  source: 'manual'
 }
 
 export interface DistrictSummary { district: string; total: number; alerts: number; flagged: number }
 
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch('/api' + path, { ...init, signal: AbortSignal.timeout(20000) })
+  } catch {
+    throw new Error('Could not reach the local server. Try again when it is running.')
+  }
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    const msg = typeof data?.detail === 'string' ? data.detail : `Request failed (${res.status}). Check the entered values.`
+    throw new Error(msg)
+  }
+  if (data === null) throw new Error('The server returned an unreadable response.')
+  return data as T
+}
+
+function post<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body) })
+}
+
 export const api = {
-  districts: () => get<DistrictSummary[]>('/districts'),
-  enterprises: (district = 'Wardha') => get<EnterpriseRow[]>(`/enterprises?district=${district}`),
-  profile: (id: number) => get<Profile>(`/enterprises/${id}`),
-  district: (d = 'Wardha') => get<DistrictRisk>(`/risk/district/${d}`),
-  leadtime: () => get<LeadTime>('/validation/leadtime'),
-  saakh: (id: number) => get<Profile & { discipline: Record<string, number | string>; generated_at: string; disclaimer_en: string }>(`/saakh/${id}`),
-  shock: (key: string) => fetch(`${BASE}/simulate/shock/${key}`, { method: 'POST' }).then(r => r.json()),
-  reset: () => fetch(`${BASE}/admin/reset`, { method: 'POST' }).then(r => r.json()),
-  intervene: (body: { enterprise_id: number; flag_id?: number; officer_note: string; outcome?: string }) =>
-    fetch(`${BASE}/interventions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
-  suggestionDone: (id: number) => fetch(`${BASE}/suggestions/${id}/done`, { method: 'POST' }).then(r => r.json()),
-  syncTxns: (txns: object[]) =>
-    fetch(`${BASE}/transactions/batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(txns) }).then(r => r.json()),
+  districts: () => request<DistrictSummary[]>('/districts'),
+  enterprises: (district = 'Wardha') => request<EnterpriseRow[]>(`/enterprises?district=${encodeURIComponent(district)}`),
+  profile: (id: number) => request<Profile>(`/enterprises/${id}`),
+  district: (district = 'Wardha') => request<DistrictRisk>(`/risk/district/${encodeURIComponent(district)}`),
+  leadtime: () => request<LeadTime>('/validation/leadtime'),
+  saakh: (id: number) => request<Profile & { discipline: Record<string, number | string>; generated_at: string; disclaimer_en: string }>(`/saakh/${id}`),
+  shock: (key: string) => post<{ shock: string; signals: { commodity: string; kind: string; magnitude_z: number }[]; enterprises: number; flagged: number; by_level: Record<string, number>; by_sector: Record<string, number> }>(`/simulate/shock/${key}`),
+  reset: () => post<{ enterprises: number }>('/admin/reset'),
+  intervene: (body: { enterprise_id: number; flag_id?: number; officer_note: string; outcome?: string; resolve?: boolean }) => post('/interventions', body),
+  suggestionDone: (id: number) => post(`/suggestions/${id}/done`),
+  syncTxns: (txns: TxnInput[]) => post<{ synced: number; inserted: number; accepted_ids: string[] }>('/transactions/batch', txns),
 }

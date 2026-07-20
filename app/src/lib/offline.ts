@@ -1,18 +1,11 @@
-// Offline layer: Dexie outbox. Entries are written locally FIRST (source of
-// truth for the enterprise user), then drained to the API when online.
-// This is the airplane-mode demo, by construction.
 import Dexie, { type Table } from 'dexie'
-import { api } from './api'
+import { api, type TxnInput } from './api'
 
-export interface LocalTxn {
+export interface LocalTxn extends Omit<TxnInput, 'client_id'> {
   id?: number
-  enterprise_id: number
-  type: 'income' | 'expense' | 'savings' | 'loan_repayment'
-  amount: number
-  note: string
-  entered_at: string
-  source: 'manual'
+  clientId: string
   synced: 0 | 1
+  error?: string
 }
 
 class SanketDB extends Dexie {
@@ -20,31 +13,52 @@ class SanketDB extends Dexie {
   constructor() {
     super('sanket')
     this.version(1).stores({ outbox: '++id, synced, enterprise_id' })
+    this.version(2).stores({ outbox: '++id, synced, enterprise_id, &clientId' })
+      .upgrade(tx => tx.table('outbox').toCollection().modify(row => {
+        row.clientId ??= crypto.randomUUID()
+      }))
   }
 }
 
 export const localdb = new SanketDB()
 
-export async function recordTxn(t: Omit<LocalTxn, 'id' | 'synced' | 'source'>) {
-  await localdb.outbox.add({ ...t, source: 'manual', synced: 0 })
-  void drainOutbox() // fire-and-forget; fails silently offline
+export async function recordTxn(txn: Omit<LocalTxn, 'id' | 'clientId' | 'synced' | 'source' | 'error'>) {
+  const id = await localdb.outbox.add({ ...txn, clientId: crypto.randomUUID(), source: 'manual', synced: 0 })
+  void drainOutbox().catch(() => {})
+  return id
 }
 
-export async function pendingCount(): Promise<number> {
+export function pendingCount() {
   return localdb.outbox.where('synced').equals(0).count()
 }
 
-export async function drainOutbox(): Promise<number> {
-  const pending = await localdb.outbox.where('synced').equals(0).toArray()
-  if (!pending.length || !navigator.onLine) return 0
-  try {
-    await api.syncTxns(pending.map(({ id, synced, ...t }) => t))
-    await localdb.outbox.bulkUpdate(pending.map(p => ({ key: p.id!, changes: { synced: 1 as const } })))
-    return pending.length
-  } catch {
-    return 0 // still offline or API down; retry on next 'online' event
+async function syncPending(): Promise<number> {
+  let count = 0
+  while (navigator.onLine) {
+    const rows = await localdb.outbox.where('synced').equals(0).limit(100).toArray()
+    if (!rows.length) break
+    try {
+      const res = await api.syncTxns(rows.map(row => ({
+        client_id: row.clientId, enterprise_id: row.enterprise_id, type: row.type,
+        amount: row.amount, note: row.note, entered_at: row.entered_at, source: 'manual',
+      })))
+      if (!Array.isArray(res.accepted_ids) || rows.some(row => !res.accepted_ids.includes(row.clientId))) {
+        throw new Error('The server did not confirm every entry. They are still saved here.')
+      }
+      await localdb.outbox.bulkUpdate(rows.map(row => ({ key: row.id!, changes: { synced: 1 as const, error: '' } })))
+      count += rows.length
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Sync failed. Your entries are still saved here.'
+      await localdb.outbox.bulkUpdate(rows.map(row => ({ key: row.id!, changes: { error } })))
+      break
+    }
   }
+  if (count) window.dispatchEvent(new Event('sanket-sync'))
+  return count
 }
 
-// auto-drain whenever connectivity returns
-window.addEventListener('online', () => void drainOutbox())
+let drainJob: Promise<number> | null = null
+export function drainOutbox(): Promise<number> {
+  drainJob ??= syncPending().finally(() => { drainJob = null })
+  return drainJob
+}

@@ -10,7 +10,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'Sanket — Rural Cash-Flow Early Warning',
+        name: 'Sanket - rural cash flow',
         short_name: 'Sanket',
         theme_color: '#166534',
         background_color: '#fafaf5',
@@ -18,8 +18,7 @@ export default defineConfig({
         icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' }],
       },
       workbox: {
-        // precache app shell; API responses network-first with cache fallback
-        // so the last-seen state renders fully offline
+        globPatterns: ['**/*.{js,css,html,svg,woff,woff2}'],
         runtimeCaching: [{
           urlPattern: /\/api\/.*/,
           handler: 'NetworkFirst',
@@ -29,7 +28,8 @@ export default defineConfig({
     }),
   ],
   server: {
-    host: true, // reachable from phone over hotspot/LAN
-    proxy: { '/api': { target: 'http://localhost:8000', rewrite: (p: string) => p.replace(/^\/api/, '') } },
+    host: '127.0.0.1',
+    strictPort: true,
+    proxy: { '/api': { target: 'http://127.0.0.1:8000', rewrite: (p: string) => p.replace(/^\/api/, '') } },
   },
 })

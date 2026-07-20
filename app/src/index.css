@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════════════════════════
-   SANKET v3 — "Editorial Fintech Terminal"
+   SANKET v3 - "Editorial Fintech Terminal"
    Reference synthesis: motion.page (display type, kickers, marquee),
    studio-arde/ponder (serif italic accents, editorial whitespace),
    ithaca/morningstar (dark mesh, glass, glow), qount (stat bands).
@@ -44,7 +44,7 @@
   --watch-soft: rgba(253, 224, 71, .05);
   --panel-hi: rgba(255, 255, 255, .035);
   --veil: rgba(8, 8, 6, .9);
-  /* phone (enterprise app) — follows the site theme */
+  /* phone (enterprise app) - follows the site theme */
   --p-bg: #141412;
   --p-card: #1c1c18;
   --p-edge: #2b2b25;
@@ -262,7 +262,7 @@ body {
 
 /* ── phone (enterprise app): true handset proportions, themed ── */
 .phone-frame {
-  width: min(384px, 94vw);
+  width: min(384px, 100%);
   min-height: 730px; max-height: 800px;
   margin-inline: auto;
   border-radius: 46px; border: 8px solid var(--p-bezel);

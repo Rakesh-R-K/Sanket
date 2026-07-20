@@ -1,33 +1,14 @@
-import { useContext, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from 'framer-motion'
+import { useContext, useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { LangContext, useT, type Lang } from './lib/i18n'
 import { Landing } from './components/Landing'
 import { OfficerConsole } from './components/OfficerConsole'
 import { EnterpriseApp } from './components/EnterpriseApp'
 import { Icon } from './components/icons'
+import { drainOutbox } from './lib/offline'
 
 type View = 'landing' | 'officer' | 'enterprise'
 export type Theme = 'dark' | 'light'
-
-/* 3D mouse-tilt stage for the phone */
-function TiltStage({ children }: { children: React.ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null)
-  const mx = useMotionValue(0.5), my = useMotionValue(0.5)
-  const rX = useSpring(useTransform(my, [0, 1], [8, -8]), { stiffness: 150, damping: 20 })
-  const rY = useSpring(useTransform(mx, [0, 1], [-10, 10]), { stiffness: 150, damping: 20 })
-  return (
-    <div ref={ref} style={{ perspective: 1400 }}
-      onPointerMove={e => {
-        const r = ref.current!.getBoundingClientRect()
-        mx.set((e.clientX - r.left) / r.width); my.set((e.clientY - r.top) / r.height)
-      }}
-      onPointerLeave={() => { mx.set(.5); my.set(.5) }}>
-      <motion.div style={{ rotateX: rX, rotateY: rY, transformStyle: 'preserve-3d' }}>
-        {children}
-      </motion.div>
-    </div>
-  )
-}
 
 /* Enterprise view = full-width showcase scene */
 function EnterpriseScene() {
@@ -64,7 +45,7 @@ function EnterpriseScene() {
           })}
         </div>
       </div>
-      <TiltStage><EnterpriseApp /></TiltStage>
+      <div className="min-w-0"><EnterpriseApp /></div>
     </div>
   )
 }
@@ -75,7 +56,7 @@ function AppHeader({ view, setView, theme, setTheme }:
   const setLang = useContext(LangContext).setLang
   return (
     <header className="no-print sticky top-0 z-20 border-b border-[var(--edge)] bg-[color-mix(in_srgb,var(--bg)_78%,transparent)] backdrop-blur-xl">
-      <div className="flex w-full items-center gap-4 px-5 py-3 md:px-8">
+      <div className="flex w-full flex-wrap items-center gap-3 px-4 py-3 md:px-8">
         <button onClick={() => setView('landing')} className="flex items-center gap-2.5">
           <span className="grid h-8 w-8 place-items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--lime)]">
             <Icon.signal size={15} />
@@ -83,7 +64,7 @@ function AppHeader({ view, setView, theme, setTheme }:
           <span className="display text-sm font-bold tracking-tight">संकेत SANKET</span>
           <span className="mono ml-1 hidden text-[8px] uppercase tracking-[.25em] text-[var(--ink-faint)] md:block">← {t('overview')}</span>
         </button>
-        <div className="ml-auto flex items-center gap-2.5">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <div className="relative flex rounded-full border border-[var(--edge)] bg-[var(--bg-2)] p-1 text-xs font-bold">
             {(['officer', 'enterprise'] as View[]).map(r => (
               <button key={r} onClick={() => setView(r)}
@@ -120,6 +101,13 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('sanket-theme') as Theme) || 'dark')
 
   useEffect(() => {
+    const sync = () => { void drainOutbox().catch(() => {}) }
+    sync()
+    window.addEventListener('online', sync)
+    return () => window.removeEventListener('online', sync)
+  }, [])
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('sanket-theme', theme)
   }, [theme])
@@ -128,7 +116,6 @@ export default function App() {
   return (
     <LangContext.Provider value={{ lang, setLang }}>
       <div className="mesh" />
-      <div className="grain" />
 
       {view !== 'landing' && (
         <AppHeader view={view} setView={setView} theme={theme} setTheme={setTheme} />
