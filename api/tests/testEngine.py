@@ -1,4 +1,5 @@
-from datetime import date
+import pytest
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -62,8 +63,8 @@ def test_peer_forecast_has_range_and_uses_the_same_district(client):
     assert forecast["points"] == profile["forecast"]["points"]
 
 
-def test_monsoon_deficit_uses_a_seasonal_baseline(client):
-    asOf = date(2026, 7, 1)
+@pytest.mark.parametrize("asOf", [date(2026, 7, 1), date(2026, 10, 17)])
+def test_monsoon_deficit_uses_a_seasonal_baseline(client, asOf):
     rain = buildHistory(asOf=asOf)["rain"]
     with db.connect() as con:
         con.execute("DELETE FROM external_series WHERE commodity='rain'")
@@ -71,6 +72,8 @@ def test_monsoon_deficit_uses_a_seasonal_baseline(client):
             "INSERT INTO external_series(series_type, commodity, district, date, value, source)"
             " VALUES ('rainfall', 'rain', 'Wardha', ?, ?, ?)",
             [(p["date"], p["value"], p["source"]) for p in rain])
-        con.execute("UPDATE external_series SET value=value*0.2 WHERE commodity='rain' AND date>='2026-05-18'")
+        assert not any(s["kind"] == "rain_deficit" for s in detectSignals(con, asOf))
+        start = (asOf - timedelta(days=44)).isoformat()
+        con.execute("UPDATE external_series SET value=value*0.2 WHERE commodity='rain' AND date>=?", (start,))
         signals = detectSignals(con, asOf)
     assert any(s["kind"] == "rain_deficit" for s in signals)

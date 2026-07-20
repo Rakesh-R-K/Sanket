@@ -66,7 +66,7 @@ def detectSignals(con, asOf: date | None = None) -> list[dict]:
                 if year >= lastDate.year:
                     continue
                 center = lastDate - pd.DateOffset(years=lastDate.year - year)
-                sample = roll.loc[center - pd.Timedelta(days=15):center + pd.Timedelta(days=15)]
+                sample = roll.loc[center - pd.Timedelta(days=3):center + pd.Timedelta(days=3)]
                 samples.extend(sample.tolist())
             if not samples or np.mean(samples) < 1:
                 continue
