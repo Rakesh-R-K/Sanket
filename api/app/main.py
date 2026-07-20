@@ -12,8 +12,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import db
-from .engine import monthly_net
-from .shocks import SHOCKS, inject, reset_and_recascade
+from .engine import activeSignals, monthlyNet, refreshEnterprise
+from .shocks import shocks, inject, resetAndRecascade
 
 @asynccontextmanager
 async def lifespan(app):
@@ -37,7 +37,7 @@ async def guardWrites(req: Request, callNext):
             return JSONResponse({"detail": "writes are only allowed from the local app"}, status_code=403)
     return await callNext(req)
 
-LEVEL_RANK = {"alert": 0, "warning": 1, "watch": 2, None: 3}
+levelRank = {"alert": 0, "warning": 1, "watch": 2, None: 3}
 
 
 class Input(BaseModel):
@@ -88,24 +88,23 @@ def requireEnterprise(con, eid):
         raise HTTPException(404, "enterprise not found")
 
 
-def _flags_with_reasons(con, enterprise_id: int) -> list[dict]:
+def flagsWithReasons(con, enterpriseId: int) -> list[dict]:
     flags = []
     for f in con.execute(
             "SELECT * FROM flags WHERE enterprise_id=? AND status='open'"
-            " ORDER BY opened_at DESC", (enterprise_id,)):
+            " ORDER BY opened_at DESC", (enterpriseId,)):
         reasons = [dict(r) for r in con.execute(
             "SELECT code, text_en, text_hi, evidence_json FROM flag_reasons"
             " WHERE flag_id=?", (f["id"],))]
         suggestions = [dict(s) for s in con.execute(
             "SELECT id, text_en, text_hi, action_status FROM suggestions"
-            " WHERE flag_id=?", (f["id"],))]
+            " WHERE flag_id=? AND active=1", (f["id"],))]
         flags.append({**dict(f), "reasons": reasons, "suggestions": suggestions})
     return flags
 
 
 @app.get("/districts")
-def list_districts():
-    """District switcher payload: per-district KPIs for the officer console."""
+def listDistricts():
     con = db.connect()
     out = []
     for d in con.execute("SELECT DISTINCT district FROM enterprises ORDER BY district"):
@@ -124,8 +123,7 @@ def list_districts():
 
 
 @app.post("/enterprises", status_code=201)
-def create_enterprise(e: EnterpriseIn):
-    from .engine import forecast_enterprise
+def createEnterprise(e: EnterpriseIn):
     with closing(db.connect()) as con, con:
         cur = con.execute(
             "INSERT INTO enterprises(name, sector, village, block, district,"
@@ -133,13 +131,12 @@ def create_enterprise(e: EnterpriseIn):
             (e.name, e.sector, e.village, e.block, e.district, e.members,
              date.today().isoformat()))
         eid = cur.lastrowid
-        fc = forecast_enterprise(con, eid, e.sector, active_signals=[])
+        fc = refreshEnterprise(con, {"id": eid, "sector": e.sector}, activeSignals(con))
     return {"id": eid, "forecast_model": fc.get("model_tag") if fc else None}
 
 
 @app.get("/enterprises")
-def list_enterprises(district: str = "Wardha"):
-    """Triage list: every enterprise + its worst open flag, ranked."""
+def listEnterprises(district: str = "Wardha"):
     con = db.connect()
     rows = [dict(e) for e in con.execute(
         "SELECT * FROM enterprises WHERE district=?", (district,))]
@@ -159,18 +156,18 @@ def list_enterprises(district: str = "Wardha"):
             " LIMIT 1", (e["id"],)).fetchone()
         e["top_reason"] = dict(top) if top else None
     con.close()
-    rows.sort(key=lambda e: (LEVEL_RANK.get(e["risk"], 3), -e["reason_count"]))
+    rows.sort(key=lambda e: (levelRank.get(e["risk"], 3), -e["reason_count"]))
     return rows
 
 
 @app.get("/enterprises/{eid}")
-def enterprise_profile(eid: int):
+def enterpriseProfile(eid: int):
     con = db.connect()
     e = con.execute("SELECT * FROM enterprises WHERE id=?", (eid,)).fetchone()
     if not e:
         con.close()
         raise HTTPException(404)
-    g = monthly_net(con, eid)
+    g = monthlyNet(con, eid)
     history = [dict(month=str(r["month"]), income=float(r["income"]),
                     expense=float(r["expense"]),
                     savings=float(r["savings"]),
@@ -190,19 +187,22 @@ def enterprise_profile(eid: int):
                           model_tag=fc["model_tag"],
                           generated_at=fc["generated_at"]) if fc else None),
         "loan": dict(loan) if loan else None,
-        "flags": _flags_with_reasons(con, eid),
+        "flags": flagsWithReasons(con, eid),
         "recent_transactions": txns,
         "interventions": [dict(i) for i in con.execute(
             "SELECT * FROM interventions WHERE enterprise_id=? ORDER BY"
             " logged_at DESC", (eid,))],
+        "action_history": [dict(s) for s in con.execute(
+            "SELECT s.id, s.text_en, s.text_hi, s.action_status, f.opened_at FROM suggestions s"
+            " JOIN flags f ON f.id=s.flag_id WHERE f.enterprise_id=? AND s.action_status!='suggested'"
+            " ORDER BY s.id DESC", (eid,))],
     }
     con.close()
     return result
 
 
 @app.get("/risk/district/{district}")
-def district_risk(district: str):
-    """Cascade map payload: per-block, per-sector risk mix + active signals."""
+def districtRisk(district: str):
     con = db.connect()
     blocks: dict[str, dict] = {}
     for r in con.execute("""
@@ -218,7 +218,7 @@ def district_risk(district: str):
         b["sectors"][r["sector"]][r["risk"]] = \
             b["sectors"][r["sector"]].get(r["risk"], 0) + 1
     signals = [dict(s) for s in con.execute(
-        "SELECT * FROM signals ORDER BY id DESC LIMIT 10")]
+        "SELECT * FROM signals WHERE active=1 ORDER BY id DESC LIMIT 10")]
     kpis = con.execute("""
         SELECT COUNT(*) total,
           SUM(CASE WHEN EXISTS (SELECT 1 FROM flags f WHERE
@@ -231,13 +231,15 @@ def district_risk(district: str):
 
     # Cluster bulletins: the district-level story a DDM or bank regional
     # office consumes. Auto-composed from signals x sector exposure x flags.
-    from .engine import EXPOSURE
-    SIGNAL_SECTORS = {"maize": "maize_price", "soybean": "soybean_price"}
+    from .engine import exposure
+    signalSectors = {"maize": "maize_price", "soybean": "soybean_price"}
     bulletins = []
     for s in signals:
+        if s["kind"] not in ("price_spike", "rain_deficit"):
+            continue
         key = ("rain_deficit" if s["kind"] in ("rain_deficit", "rain_excess")
-               else SIGNAL_SECTORS.get(s["commodity"]))
-        exposed = EXPOSURE.get(key, {}) if key else {}
+               else signalSectors.get(s["commodity"]))
+        exposed = exposure.get(key, {}) if key else {}
         for sector, share in sorted(exposed.items(), key=lambda kv: -kv[1]):
             row = con.execute("""
                 SELECT COUNT(DISTINCT e.id) n,
@@ -266,7 +268,7 @@ def district_risk(district: str):
 
 
 @app.post("/transactions/batch")
-def add_transactions(txns: Annotated[list[TxnIn], Body(min_length=1, max_length=100)]):
+def addTransactions(txns: Annotated[list[TxnIn], Body(min_length=1, max_length=100)]):
     with closing(db.connect()) as con, con:
         for eid in {t.enterpriseId for t in txns}:
             requireEnterprise(con, eid)
@@ -275,11 +277,15 @@ def add_transactions(txns: Annotated[list[TxnIn], Body(min_length=1, max_length=
             " entered_at, source) VALUES (?,?,?,?,?,?)",
             [(t.enterpriseId, t.type, t.amount, t.note, t.enteredAt.isoformat(), "manual")
              for t in txns])
+        signals = activeSignals(con)
+        for eid in {t.enterpriseId for t in txns}:
+            enterprise = con.execute("SELECT id, sector FROM enterprises WHERE id=?", (eid,)).fetchone()
+            refreshEnterprise(con, enterprise, signals)
     return {"synced": len(txns)}
 
 
 @app.post("/interventions")
-def log_intervention(iv: InterventionIn):
+def logIntervention(iv: InterventionIn):
     with closing(db.connect()) as con, con:
         requireEnterprise(con, iv.enterpriseId)
         if iv.flagId and not con.execute(
@@ -297,7 +303,7 @@ def log_intervention(iv: InterventionIn):
 
 
 @app.post("/suggestions/{sid}/done")
-def suggestion_done(sid: int):
+def suggestionDone(sid: int):
     with closing(db.connect()) as con, con:
         cur = con.execute("UPDATE suggestions SET action_status='done' WHERE id=?", (sid,))
         if not cur.rowcount:
@@ -305,32 +311,27 @@ def suggestion_done(sid: int):
     return {"ok": True}
 
 
-@app.post("/simulate/shock/{shock_key}")
-def simulate_shock(shock_key: str):
-    """Demo time machine: inject shock, re-run the real nightly cascade."""
-    if shock_key not in SHOCKS:
-        raise HTTPException(400, f"unknown shock; options: {list(SHOCKS)}")
-    con = db.connect()
-    result = inject(con, shock_key)
-    con.close()
+@app.post("/simulate/shock/{shockKey}")
+def simulateShock(shockKey: str):
+    if shockKey not in shocks:
+        raise HTTPException(400, f"unknown shock; options: {list(shocks)}")
+    with closing(db.connect()) as con:
+        try:
+            result = inject(con, shockKey)
+        except ValueError as err:
+            raise HTTPException(409, str(err)) from err
     return result
 
 
 @app.post("/admin/reset")
-def admin_reset():
-    """Pristine demo state in seconds."""
-    return reset_and_recascade()
+def adminReset():
+    return resetAndRecascade()
 
 
 @app.get("/validation/leadtime")
-def validation_leadtime():
-    """North Star Metric, computed live: for every open flag, days between
-    the flag opening and the first forecast month projected cash-negative.
-    This is early-warning lead time - the intervention window the system
-    buys for the field officer. No accuracy-%; behavioral validation only.
-    """
+def validationLeadtime():
     con = db.connect()
-    lead_days: list[int] = []
+    leadDays: list[int] = []
     detail = []
     for f in con.execute("""
         SELECT f.id, f.enterprise_id, f.opened_at, e.name FROM flags f
@@ -348,31 +349,29 @@ def validation_leadtime():
         distress = datetime.fromisoformat(neg["month"] + "-15")  # mid-month
         days = (distress - opened).days
         if days > 0:
-            lead_days.append(days)
+            leadDays.append(days)
             detail.append({"enterprise": f["name"], "flagged": f["opened_at"],
                            "projected_distress_month": neg["month"],
                            "lead_days": days})
     con.close()
-    lead_days.sort()
-    n = len(lead_days)
+    leadDays.sort()
+    n = len(leadDays)
     return {
         "flags_with_projected_distress": n,
-        "median_lead_days": lead_days[n // 2] if n else None,
-        "min_lead_days": lead_days[0] if n else None,
-        "max_lead_days": lead_days[-1] if n else None,
+        "median_lead_days": leadDays[n // 2] if n else None,
+        "min_lead_days": leadDays[0] if n else None,
+        "max_lead_days": leadDays[-1] if n else None,
         "target_days": 45,
-        "interpretation": ("Median lead time is the intervention window the "
-                           "system buys before projected cash distress."),
+        "interpretation": "Derived from the forecast, not a measured prediction accuracy.",
         "detail": sorted(detail, key=lambda d: d["lead_days"])[:10],
     }
 
 
 @app.get("/saakh/{eid}")
-def saakh_payload(eid: int):
-    """Everything the SAAKH report template needs, in one call."""
-    profile = enterprise_profile(eid)
+def saakhPayload(eid: int):
+    profile = enterpriseProfile(eid)
     con = db.connect()
-    txn_stats = con.execute("""
+    txnStats = con.execute("""
         SELECT COUNT(*) entries,
                MIN(entered_at) first_entry,
                COUNT(DISTINCT substr(entered_at,1,7)) active_months
@@ -381,19 +380,20 @@ def saakh_payload(eid: int):
         "SELECT COUNT(*) c FROM flags WHERE enterprise_id=? AND"
         " status='resolved'", (eid,)).fetchone()["c"]
     con.close()
-    hist = profile["history"]
-    sav_months = sum(1 for m in hist if m["savings"] > 0)
-    rep_months = sum(1 for m in hist if m["repayment"] > 0)
+    hist = [p for p in profile["history"] if p["month"] < date.today().strftime("%Y-%m")]
+    savMonths = sum(1 for m in hist if m["savings"] > 0)
+    repMonths = sum(1 for m in hist if m["repayment"] > 0)
     return {
         **profile,
         "discipline": {
-            **dict(txn_stats),
-            "savings_regularity_pct": round(100 * sav_months / max(1, len(hist))),
-            "repayment_regularity_pct": round(100 * rep_months / max(1, len(hist))),
+            **dict(txnStats),
+            "window_months": len(hist),
+            "savings_regularity_pct": round(100 * savMonths / max(1, len(hist))),
+            "repayment_regularity_pct": round(100 * repMonths / max(1, len(hist))),
             "shocks_survived": resolved,
         },
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "disclaimer_en": ("Generated at the enterprise's request. Data is "
-                          "self-reported plus district market/climate series. "
-                          "This is an evidence dossier, not a credit score."),
+        "disclaimer_en": ("Demo data mixed with manual entries. Market and rainfall context uses a shared "
+                          "Wardha series, mostly generated from seasonal assumptions. Forecast ranges "
+                          "are indicative and have no measured coverage. This report is not a credit score."),
     }

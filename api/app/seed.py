@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import time
+from contextlib import closing
 
 from . import db
-from .data_layer import build_history
-from .engine import run_cascade
+from .dataLayer import buildHistory
+from .engine import runCascade
 from .simulator import generate
 
 
@@ -15,12 +16,12 @@ def run(seed: int = 42, reset: bool = False) -> dict:
         db.resetDb()
     else:
         db.initDb()
-    con = db.connect()
-    count = con.execute("SELECT COUNT(*) FROM enterprises").fetchone()[0]
-    con.close()
-    if count:
-        return {"enterprises": count, "note": "existing data kept; use --reset to replace it"}
-    external = build_history(seed)
+    with closing(db.connect()) as con:
+        count = con.execute("SELECT COUNT(*) FROM enterprises").fetchone()[0]
+        if count:
+            cascade = runCascade(con)
+            return {**cascade, "note": "existing data kept; use --reset to replace it"}
+    external = buildHistory(seed)
     sim = generate(external, seed)
 
     con = db.connect()
@@ -45,7 +46,7 @@ def run(seed: int = 42, reset: bool = False) -> dict:
         ":lender)", sim["loans"])
     con.commit()
 
-    cascade = run_cascade(con)
+    cascade = runCascade(con)
     con.close()
     return {"seconds": round(time.time() - t0, 1),
             "enterprises": len(sim["enterprises"]),

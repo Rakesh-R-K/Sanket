@@ -65,8 +65,6 @@ def test_offline_sync_batch(client):
 
 
 def test_cold_start_enterprise_gets_sector_prior_forecast(client):
-    """The thin-file case the problem statement centres on: a brand-new
-    enterprise must get a forecast from day zero via the sector prior."""
     r = client.post("/enterprises", json=dict(
         name="Navjeevan SHG (Radha)", sector="dairy",
         village="Talegaon", block="Arvi", members=11))

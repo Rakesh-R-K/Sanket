@@ -5,7 +5,7 @@ from pathlib import Path
 
 dbPath = Path(os.environ.get("SANKET_DB", Path(__file__).resolve().parent.parent / "sanket.db"))
 
-SCHEMA = """
+schema = """
 CREATE TABLE IF NOT EXISTS enterprises (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS signals (
     kind TEXT NOT NULL CHECK(kind IN ('price_spike','price_crash','rain_deficit','rain_excess')),
     magnitude_z REAL NOT NULL,
     window_days INTEGER NOT NULL,
-    detail TEXT DEFAULT ''
+    detail TEXT DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS forecasts (
     id INTEGER PRIMARY KEY,
@@ -85,7 +86,8 @@ CREATE TABLE IF NOT EXISTS suggestions (
     text_en TEXT NOT NULL,
     text_hi TEXT NOT NULL,
     action_status TEXT NOT NULL DEFAULT 'suggested'
-        CHECK(action_status IN ('suggested','done','dismissed'))
+        CHECK(action_status IN ('suggested','done','dismissed')),
+    active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS interventions (
     id INTEGER PRIMARY KEY,
@@ -112,7 +114,11 @@ def connect() -> sqlite3.Connection:
 def initDb(con: sqlite3.Connection | None = None) -> None:
     own = con is None
     con = con or connect()
-    con.executescript(SCHEMA)
+    con.executescript(schema)
+    for table in ("signals", "suggestions"):
+        columns = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+        if "active" not in columns:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     con.commit()
     if own:
         con.close()
@@ -124,18 +130,23 @@ def resetDb() -> None:
     initDb()
 
 
-def create_flag(con, enterprise_id: int, level: str, opened_at: str,
-                reasons: list[dict], signal_id: int | None = None) -> int:
+def createFlag(con, enterpriseId: int, level: str, openedAt: str,
+               reasons: list[dict], signalId: int | None = None) -> int:
     if not reasons:
         raise ValueError("flag requires >=1 reason (explainability contract)")
     cur = con.execute(
         "INSERT INTO flags(enterprise_id, level, opened_at, signal_id) VALUES (?,?,?,?)",
-        (enterprise_id, level, opened_at, signal_id))
+        (enterpriseId, level, openedAt, signalId))
     fid = cur.lastrowid
+    writeReasons(con, fid, reasons)
+    return fid
+
+
+def writeReasons(con, fid: int, reasons: list[dict]) -> None:
+    con.execute("DELETE FROM flag_reasons WHERE flag_id=?", (fid,))
     for r in reasons:
         con.execute(
             "INSERT INTO flag_reasons(flag_id, code, text_en, text_hi, evidence_json)"
             " VALUES (?,?,?,?,?)",
             (fid, r["code"], r["text_en"], r["text_hi"],
              json.dumps(r.get("evidence", {}))))
-    return fid
